@@ -65,6 +65,22 @@ confirmation with the file path and record counts, and see
 `sarnie-backup-YYYY-MM-DD.json` appear in your Dropbox. After that it runs
 automatically every night at 23:00.
 
+## 5. (Recommended) Guarantee the 23:00 run on Render free tier
+
+Render's free instance sleeps after ~15 min idle, and the built-in 23:00 timer
+won't fire while it's asleep. To make the nightly backup bullet-proof, have a
+free scheduler call the wake-and-backup endpoint:
+
+1. Sign up at **https://cron-job.org** (free).
+2. Create a cron job:
+   - **URL:** `https://sarnie-kitchen-agent.onrender.com/tasks/backup/sarnie-agent-secret`
+     (replace `sarnie-agent-secret` if you set a custom `WEBHOOK_SECRET`)
+   - **Schedule:** every day at **23:00**, timezone **Europe/London**
+3. Save. That request wakes the agent and runs the backup; you'll get the
+   Telegram confirmation each night.
+
+(The in-app 23:00 cron still runs too — this is just a reliable backstop.)
+
 ## What's in each backup
 
 A single JSON file per day containing every table: `app_users`, `app_settings`

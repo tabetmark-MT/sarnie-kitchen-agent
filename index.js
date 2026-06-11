@@ -19,6 +19,25 @@ app.use(express.json());
 // ── Health check ──────────────────────────────────────────────────────────
 app.get('/', (req, res) => res.json({ status: 'ok', agent: 'Sarnie Kitchen Agent', time: new Date().toISOString() }));
 
+// ── External backup trigger ─────────────────────────────────────────────────
+// Lets a free scheduler (e.g. cron-job.org) run the backup at 23:00 even when
+// the free Render instance has gone to sleep — the request itself wakes it.
+async function triggerBackup(res) {
+  try {
+    const result = await runNightlyBackup();
+    if (result.ok || !/not configured/.test(result.reason || '')) {
+      await sendMessage(OWNER_CHAT_ID, formatBackupResult(result));
+    }
+    res.json(result);
+  } catch (err) {
+    console.error('[Backup endpoint] failed:', err.message);
+    await sendMessage(OWNER_CHAT_ID, `⚠️ Nightly Dropbox backup failed: ${err.message}`);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+}
+app.get(`/tasks/backup/${WEBHOOK_SECRET}`,  (req, res) => triggerBackup(res));
+app.post(`/tasks/backup/${WEBHOOK_SECRET}`, (req, res) => triggerBackup(res));
+
 // ── Telegram webhook ──────────────────────────────────────────────────────
 app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
   res.sendStatus(200); // Always ack fast
