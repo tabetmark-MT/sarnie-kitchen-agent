@@ -1,0 +1,22 @@
+name: Nightly Dropbox Backup
+
+# Triggers the agent's backup endpoint every night. GitHub Actions cron is in
+# UTC: 21:00 UTC = 22:00 UK during BST (and 21:00 during GMT/winter) — just
+# after the kitchen closes. Runs on GitHub's infrastructure, so it fires
+# reliably even when the free Render instance is asleep (the request wakes it).
+on:
+  schedule:
+    - cron: '0 21 * * *'
+  workflow_dispatch: {}   # allows manual "Run workflow" + automated test
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Dropbox backup
+        run: |
+          echo "Calling backup endpoint (cold start can take ~60s)…"
+          body=$(curl -s --max-time 180 "${{ secrets.BACKUP_URL }}")
+          echo "Response: $body"
+          echo "$body" | grep -q '"ok":true' || { echo "::error::Backup did not report success"; exit 1; }
+          echo "✅ Backup succeeded"
