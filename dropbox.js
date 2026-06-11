@@ -30,7 +30,7 @@ export async function uploadToDropbox(path, contents) {
   const token = await getAccessToken();
   let res;
   try {
-    res = await fetch('https://content.dropboxapis.com/2/files/upload', {
+    res = await fetch('https://content.dropboxapi.com/2/files/upload', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
