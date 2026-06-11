@@ -2,6 +2,7 @@ import express from 'express';
 import cron    from 'node-cron';
 import { sendMessage, setWebhook, parseUpdate } from './telegram.js';
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
+import { runNightlyBackup, formatBackupResult } from './backup.js';
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -10,6 +11,8 @@ const OWNER_CHAT_ID   = process.env.TELEGRAM_CHAT_ID;   // 2046354154
 const WEBHOOK_SECRET  = process.env.WEBHOOK_SECRET || 'sarnie-agent-secret';
 const MORNING_HOUR    = process.env.MORNING_HOUR   || '9';   // 9am by default
 const MORNING_MINUTE  = process.env.MORNING_MINUTE || '0';
+const BACKUP_HOUR     = process.env.BACKUP_HOUR    || '23';  // nightly Dropbox backup
+const BACKUP_MINUTE   = process.env.BACKUP_MINUTE  || '0';
 
 app.use(express.json());
 
@@ -34,11 +37,16 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
   try {
     let reply;
     if (isCommand) {
-      reply = await handleCommand(command, name);
-      // Trigger manual backup if requested
+      // Run an off-site Dropbox backup on demand
       if (command === '/backup') {
-        // Just a message — real backup happens in the app
-        reply = '✅ Manual backup triggered. Check Settings → Data & Backup in the app to confirm.';
+        await sendMessage(chatId, '💾 Running backup to Dropbox…');
+        try {
+          reply = formatBackupResult(await runNightlyBackup());
+        } catch (e) {
+          reply = `⚠️ Backup failed: ${e.message}`;
+        }
+      } else {
+        reply = await handleCommand(command, name);
       }
     } else {
       reply = await handleMessage(text, name);
@@ -61,6 +69,22 @@ cron.schedule(`${MORNING_MINUTE} ${MORNING_HOUR} * * *`, async () => {
     console.log('[Cron] Morning debrief sent ✅');
   } catch (err) {
     console.error('[Cron] Failed to send morning debrief:', err.message);
+  }
+}, { timezone: 'Europe/London' });
+
+// ── Nightly off-site backup cron (23:00 Europe/London) ──────────────────────
+cron.schedule(`${BACKUP_MINUTE} ${BACKUP_HOUR} * * *`, async () => {
+  console.log('[Cron] Running nightly Dropbox backup...');
+  try {
+    const result = await runNightlyBackup();
+    console.log('[Cron] Backup:', result.ok ? `✅ ${result.path}` : `⚠️ ${result.reason}`);
+    // Only notify on success or real failure (not when Dropbox simply isn't configured yet)
+    if (result.ok || !/not configured/.test(result.reason || '')) {
+      await sendMessage(OWNER_CHAT_ID, formatBackupResult(result));
+    }
+  } catch (err) {
+    console.error('[Cron] Nightly backup failed:', err.message);
+    await sendMessage(OWNER_CHAT_ID, `⚠️ Nightly Dropbox backup failed: ${err.message}`);
   }
 }, { timezone: 'Europe/London' });
 

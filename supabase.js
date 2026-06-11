@@ -46,6 +46,18 @@ export async function getCompletionsRange(daysBack = 7) {
   return data || [];
 }
 
+// ── Full database snapshot (for off-site backups) ──────────────────────────
+export async function getAllData() {
+  const tables = ['app_users', 'app_settings', 'checklists', 'completions', 'audit_log'];
+  const out = {};
+  for (const t of tables) {
+    const { data, error } = await supabase.from(t).select('*');
+    if (error) console.warn(`[Backup] could not read ${t}:`, error.message);
+    out[t] = error ? [] : (data || []);
+  }
+  return out;
+}
+
 // ── Fetch all users ────────────────────────────────────────────────────────
 export async function getUsers() {
   const { data } = await supabase
