@@ -30,9 +30,10 @@ async function triggerBackup(res) {
     }
     res.json(result);
   } catch (err) {
-    console.error('[Backup endpoint] failed:', err.message);
-    await sendMessage(OWNER_CHAT_ID, `⚠️ Nightly Dropbox backup failed: ${err.message}`);
-    res.status(500).json({ ok: false, error: err.message });
+    const detail = err.cause ? ` (${err.cause.code || err.cause})` : '';
+    console.error('[Backup endpoint] failed:', err.message, detail);
+    await sendMessage(OWNER_CHAT_ID, `⚠️ Nightly Dropbox backup failed: ${err.message}${detail}`);
+    res.status(500).json({ ok: false, error: err.message + detail });
   }
 }
 app.get(`/tasks/backup/${WEBHOOK_SECRET}`,  (req, res) => triggerBackup(res));
