@@ -38,6 +38,35 @@ async function triggerBackup(res) {
 app.get(`/tasks/backup/${WEBHOOK_SECRET}`,  (req, res) => triggerBackup(res));
 app.post(`/tasks/backup/${WEBHOOK_SECRET}`, (req, res) => triggerBackup(res));
 
+// ── Diagnostics: pinpoint which step fails (no secrets revealed) ─────────────
+app.get(`/tasks/diag/${WEBHOOK_SECRET}`, async (req, res) => {
+  const out = { node: process.version, env: {
+    SUPABASE_URL: !!process.env.SUPABASE_URL,
+    SUPABASE_ANON_KEY: !!process.env.SUPABASE_ANON_KEY,
+    DROPBOX_APP_KEY: !!process.env.DROPBOX_APP_KEY,
+    DROPBOX_APP_SECRET: !!process.env.DROPBOX_APP_SECRET,
+    DROPBOX_REFRESH_TOKEN: !!process.env.DROPBOX_REFRESH_TOKEN,
+  }};
+  // Test 1: Supabase reachable
+  try {
+    const r = await fetch(`${process.env.SUPABASE_URL}/rest/v1/app_users?select=id&limit=1`, {
+      headers: { apikey: process.env.SUPABASE_ANON_KEY, Authorization: `Bearer ${process.env.SUPABASE_ANON_KEY}` },
+    });
+    out.supabase = { ok: r.ok, status: r.status };
+  } catch (e) { out.supabase = { ok: false, error: e.message, cause: e.cause?.code || String(e.cause || '') }; }
+  // Test 2: Dropbox token endpoint reachable + refresh token valid
+  try {
+    const auth = Buffer.from(`${process.env.DROPBOX_APP_KEY}:${process.env.DROPBOX_APP_SECRET}`).toString('base64');
+    const r = await fetch('https://api.dropbox.com/oauth2/token', {
+      method: 'POST',
+      headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: process.env.DROPBOX_REFRESH_TOKEN || '' }),
+    });
+    out.dropboxToken = { ok: r.ok, status: r.status, body: r.ok ? 'access_token received' : (await r.text()).slice(0, 200) };
+  } catch (e) { out.dropboxToken = { ok: false, error: e.message, cause: e.cause?.code || String(e.cause || '') }; }
+  res.json(out);
+});
+
 // ── Telegram webhook ──────────────────────────────────────────────────────
 app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
   res.sendStatus(200); // Always ack fast
