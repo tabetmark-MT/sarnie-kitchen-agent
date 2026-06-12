@@ -46,6 +46,15 @@ export async function getCompletionsRange(daysBack = 7) {
   return data || [];
 }
 
+// ── Single app_settings value get/set (used for backup de-duplication) ─────
+export async function getSetting(key) {
+  const { data } = await supabase.from('app_settings').select('value').eq('key', key).maybeSingle();
+  return data?.value;
+}
+export async function upsertSetting(key, value) {
+  await supabase.from('app_settings').upsert([{ key, value, updated_at: new Date().toISOString() }]);
+}
+
 // ── Full database snapshot (for off-site backups) ──────────────────────────
 export async function getAllData() {
   const tables = ['app_users', 'app_settings', 'checklists', 'completions', 'audit_log'];

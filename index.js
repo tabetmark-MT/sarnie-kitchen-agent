@@ -25,7 +25,9 @@ app.get('/', (req, res) => res.json({ status: 'ok', agent: 'Sarnie Kitchen Agent
 async function triggerBackup(res) {
   try {
     const result = await runNightlyBackup();
-    if (result.ok || !/not configured/.test(result.reason || '')) {
+    // Stay silent when another scheduler already backed up today (de-dup), and
+    // when Dropbox simply isn't configured yet. Only notify on a real backup/error.
+    if (!result.skipped && (result.ok || !/not configured/.test(result.reason || ''))) {
       await sendMessage(OWNER_CHAT_ID, formatBackupResult(result));
     }
     res.json(result);
@@ -61,7 +63,7 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
       if (command === '/backup') {
         await sendMessage(chatId, '💾 Running backup to Dropbox…');
         try {
-          reply = formatBackupResult(await runNightlyBackup());
+          reply = formatBackupResult(await runNightlyBackup({ force: true }));
         } catch (e) {
           reply = `⚠️ Backup failed: ${e.message}`;
         }
@@ -92,14 +94,14 @@ cron.schedule(`${MORNING_MINUTE} ${MORNING_HOUR} * * *`, async () => {
   }
 }, { timezone: 'Europe/London' });
 
-// ── Nightly off-site backup cron (23:00 Europe/London) ──────────────────────
+// ── Nightly off-site backup cron (Europe/London) ────────────────────────────
 cron.schedule(`${BACKUP_MINUTE} ${BACKUP_HOUR} * * *`, async () => {
   console.log('[Cron] Running nightly Dropbox backup...');
   try {
     const result = await runNightlyBackup();
-    console.log('[Cron] Backup:', result.ok ? `✅ ${result.path}` : `⚠️ ${result.reason}`);
-    // Only notify on success or real failure (not when Dropbox simply isn't configured yet)
-    if (result.ok || !/not configured/.test(result.reason || '')) {
+    console.log('[Cron] Backup:', result.skipped ? '↩︎ already done today' : result.ok ? `✅ ${result.path}` : `⚠️ ${result.reason}`);
+    // Stay silent if already done today (another scheduler) or not configured.
+    if (!result.skipped && (result.ok || !/not configured/.test(result.reason || ''))) {
       await sendMessage(OWNER_CHAT_ID, formatBackupResult(result));
     }
   } catch (err) {

@@ -1,10 +1,21 @@
-import { getAllData } from './supabase.js';
+import { getAllData, getSetting, upsertSetting } from './supabase.js';
 import { uploadToDropbox, dropboxConfigured } from './dropbox.js';
 
+const londonDate = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }); // YYYY-MM-DD
+
 // ── Off-site nightly backup: full Supabase snapshot → Dropbox ────────────────
-export async function runNightlyBackup() {
+// Idempotent per calendar day: multiple schedulers (GitHub Actions, in-process
+// cron, external pinger) can all call this, but only the first run each day
+// actually backs up. Pass { force: true } for an on-demand /backup.
+export async function runNightlyBackup({ force = false } = {}) {
   if (!dropboxConfigured()) {
     return { ok: false, reason: 'Dropbox not configured (set DROPBOX_APP_KEY / SECRET / REFRESH_TOKEN)' };
+  }
+
+  const today = londonDate();
+  if (!force) {
+    const last = await getSetting('last_dropbox_backup');
+    if (last === today) return { ok: true, skipped: true, reason: 'already backed up today', date: today };
   }
 
   const data = await getAllData();
@@ -17,10 +28,10 @@ export async function runNightlyBackup() {
   const json = JSON.stringify(payload, null, 2);
 
   const folder = (process.env.DROPBOX_BACKUP_PATH || '/Sarnie Social Backups').replace(/\/$/, '');
-  const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-  const path = `${folder}/sarnie-backup-${date}.json`;
+  const path = `${folder}/sarnie-backup-${today}.json`;
 
   await uploadToDropbox(path, Buffer.from(json, 'utf8'));
+  await upsertSetting('last_dropbox_backup', today); // mark done so later triggers skip
 
   const counts = Object.fromEntries(
     Object.entries(data).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0])
