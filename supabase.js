@@ -127,6 +127,44 @@ export async function buildKitchenContext() {
 
   const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
+  // ── Employee Management (clock in/out + hours) ──
+  const employees = settings.employees || [];
+  const timeEntries = settings.time_entries || [];
+  const nowMs = Date.now();
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  const weekStart = new Date(); const wd = (weekStart.getDay() + 6) % 7;
+  weekStart.setDate(weekStart.getDate() - wd); weekStart.setHours(0, 0, 0, 0);
+  const entryMins = (e, fromMs) => {
+    const s = Math.max(new Date(e.clockIn).getTime(), fromMs);
+    const en = e.clockOut ? new Date(e.clockOut).getTime() : nowMs;
+    return Math.max(0, (en - s) / 60000);
+  };
+  const fmtH = (m) => { const h = Math.floor(m / 60), mm = Math.round(m % 60); return h ? `${h}h ${mm}m` : `${mm}m`; };
+  const nameFor = (id, fallback) => employees.find(e => e.id === id)?.name || fallback || 'Employee';
+  const onShift = timeEntries.filter(e => !e.clockOut).map(e => {
+    const t = new Date(e.clockIn).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    return `${nameFor(e.employeeId, e.employeeName)} (since ${t}, ${fmtH(entryMins(e, 0))})`;
+  });
+  const hoursLine = (fromMs) => employees
+    .filter(emp => emp.active !== false)
+    .map(emp => {
+      const mins = timeEntries
+        .filter(e => e.employeeId === emp.id && (e.clockOut ? new Date(e.clockOut).getTime() : nowMs) >= fromMs)
+        .reduce((s, e) => s + entryMins(e, fromMs), 0);
+      return mins > 0 ? `  • ${emp.name}: ${fmtH(mins)}` : null;
+    })
+    .filter(Boolean);
+  const todayHours = hoursLine(startOfToday.getTime());
+  const weekHours = hoursLine(weekStart.getTime());
+
+  const employeeBlock = `
+EMPLOYEE MANAGEMENT:
+  Currently on shift (${onShift.length}): ${onShift.length ? onShift.join(', ') : 'nobody clocked in'}
+  Hours TODAY:
+${todayHours.length ? todayHours.join('\n') : '  • None recorded'}
+  Hours THIS WEEK (from Monday):
+${weekHours.length ? weekHours.join('\n') : '  • None recorded'}`;
+
   return `
 TODAY: ${today}
 ACTIVE STAFF: ${users.map(u => `${u.name} (${u.role})`).join(', ')}
@@ -141,6 +179,8 @@ EXPECTED DAILY CHECKLISTS:
   • Opening clean (morning section) — INCLUDES the fridge temperature checks (all fridges/saladette probed & logged at opening)
   • Closing clean (closing section) — INCLUDES the fridge temperature checks again at close
   NOTE: Fridge temperature checks are part of the daily cleaning checklist (Opening + Closing sections), NOT a separate log. If Opening and Closing are completed, fridge temps ARE covered — do not report them as missing.
+
+${employeeBlock}
 
 RECENT AUDIT EVENTS:
 ${audit.slice(0, 10).map(a => `  • ${new Date(a.timestamp).toLocaleString('en-GB')} — ${a.action}: ${a.detail || ''}`).join('\n')}
