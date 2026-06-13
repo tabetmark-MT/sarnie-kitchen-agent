@@ -138,9 +138,9 @@ YESTERDAY'S COMPLETIONS (${yesterdayC.length}):
 ${yesterdayC.length ? yesterdayC.map(fmt).join('\n') : '  • None recorded'}
 
 EXPECTED DAILY CHECKLISTS:
-  • Opening clean (morning section)
-  • Closing clean (closing section)
-  • Fridge temperature checks
+  • Opening clean (morning section) — INCLUDES the fridge temperature checks (all fridges/saladette probed & logged at opening)
+  • Closing clean (closing section) — INCLUDES the fridge temperature checks again at close
+  NOTE: Fridge temperature checks are part of the daily cleaning checklist (Opening + Closing sections), NOT a separate log. If Opening and Closing are completed, fridge temps ARE covered — do not report them as missing.
 
 RECENT AUDIT EVENTS:
 ${audit.slice(0, 10).map(a => `  • ${new Date(a.timestamp).toLocaleString('en-GB')} — ${a.action}: ${a.detail || ''}`).join('\n')}
