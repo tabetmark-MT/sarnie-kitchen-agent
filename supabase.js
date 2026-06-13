@@ -154,16 +154,36 @@ export async function buildKitchenContext() {
       return mins > 0 ? `  • ${emp.name}: ${fmtH(mins)}` : null;
     })
     .filter(Boolean);
+  const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
   const todayHours = hoursLine(startOfToday.getTime());
   const weekHours = hoursLine(weekStart.getTime());
+  const monthHours = hoursLine(monthStart.getTime());
+
+  // Recent clock in/out log (last 40 shifts, newest first) — lets the agent
+  // answer "who clocked in/out" and break down hours by any day/week/month.
+  const recentShifts = [...timeEntries]
+    .sort((a, b) => new Date(b.clockIn) - new Date(a.clockIn))
+    .slice(0, 40)
+    .map(e => {
+      const inT = new Date(e.clockIn);
+      const dayStr = inT.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+      const inStr = inT.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+      const outStr = e.clockOut ? new Date(e.clockOut).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'still on shift';
+      const dur = fmtH(entryMins(e, 0));
+      return `  • ${nameFor(e.employeeId, e.employeeName)} — ${dayStr}: ${inStr} → ${outStr} (${dur})${e.editedBy ? ' [edited]' : ''}`;
+    });
 
   const employeeBlock = `
-EMPLOYEE MANAGEMENT:
+EMPLOYEE MANAGEMENT (clock in/out & hours — Monday is the start of the week):
   Currently on shift (${onShift.length}): ${onShift.length ? onShift.join(', ') : 'nobody clocked in'}
   Hours TODAY:
 ${todayHours.length ? todayHours.join('\n') : '  • None recorded'}
   Hours THIS WEEK (from Monday):
-${weekHours.length ? weekHours.join('\n') : '  • None recorded'}`;
+${weekHours.length ? weekHours.join('\n') : '  • None recorded'}
+  Hours THIS MONTH:
+${monthHours.length ? monthHours.join('\n') : '  • None recorded'}
+  RECENT CLOCK IN/OUT LOG (newest first — use this to break down any specific day/week/month or list who clocked in/out):
+${recentShifts.length ? recentShifts.join('\n') : '  • No shifts recorded'}`;
 
   return `
 TODAY: ${today}
