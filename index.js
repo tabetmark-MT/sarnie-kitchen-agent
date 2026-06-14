@@ -3,7 +3,6 @@ import cron    from 'node-cron';
 import { sendMessage, setWebhook, parseUpdate } from './telegram.js';
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
 import { runNightlyBackup, formatBackupResult } from './backup.js';
-import { runReminderCron, sendPushToAll, pushConfigured } from './push.js';
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -41,17 +40,6 @@ async function triggerBackup(res) {
 }
 app.get(`/tasks/backup/${WEBHOOK_SECRET}`,  (req, res) => triggerBackup(res));
 app.post(`/tasks/backup/${WEBHOOK_SECRET}`, (req, res) => triggerBackup(res));
-
-// ── Push test trigger ───────────────────────────────────────────────────────
-// Sends a test notification to every subscribed device (verify setup).
-app.get(`/tasks/push-test/${WEBHOOK_SECRET}`, async (req, res) => {
-  try {
-    const result = await sendPushToAll({ title: '🔔 Sarnie Social test', body: 'Push notifications are working on this device.', url: '/' });
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
 
 // ── Telegram webhook ──────────────────────────────────────────────────────
 app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
@@ -122,19 +110,9 @@ cron.schedule(`${BACKUP_MINUTE} ${BACKUP_HOUR} * * *`, async () => {
   }
 }, { timezone: 'Europe/London' });
 
-// ── Reminder push cron (every minute, Europe/London) ────────────────────────
-// Delivers scheduled reminders (opening/closing clean, cook-chill, hot holding,
-// delivery, weekly, custom) to all subscribed devices — fires even when the app
-// is closed. No-op until VAPID keys are configured.
-cron.schedule('* * * * *', async () => {
-  try { await runReminderCron(); }
-  catch (err) { console.error('[Cron] reminder push failed:', err.message); }
-}, { timezone: 'Europe/London' });
-
 // ── Start server ──────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
   console.log(`🤖 Sarnie Kitchen Agent running on port ${PORT}`);
-  console.log('[Push]', pushConfigured() ? '✅ Web Push configured' : '⚠️ VAPID keys not set — push disabled');
 
   // Register webhook with Telegram
   const appUrl = process.env.APP_URL;
