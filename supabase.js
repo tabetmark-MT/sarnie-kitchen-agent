@@ -159,6 +159,34 @@ export async function buildKitchenContext() {
   const weekHours = hoursLine(weekStart.getTime());
   const monthHours = hoursLine(monthStart.getTime());
 
+  // Weekly hours vs each employee's contracted/student target (+ remaining)
+  const goalFor = (emp) => {
+    if (emp.empType === 'student') return { kind: 'cap', max: Number(emp.weeklyHours) || 20, label: 'student' };
+    if (emp.empType === 'contract' && (emp.weeklyMin || emp.weeklyMax)) return { kind: 'range', min: Number(emp.weeklyMin) || 0, max: Number(emp.weeklyMax) || 0, label: 'contract' };
+    if (emp.empType === 'casual' && Number(emp.weeklyHours) > 0) return { kind: 'target', target: Number(emp.weeklyHours), label: 'casual' };
+    return null;
+  };
+  const weeklyTargetLines = employees.filter(e => e.active !== false).map(emp => {
+    const g = goalFor(emp);
+    if (!g) return null;
+    const mins = timeEntries
+      .filter(e => e.employeeId === emp.id && (e.clockOut ? new Date(e.clockOut).getTime() : nowMs) >= weekStart.getTime())
+      .reduce((s, e) => s + entryMins(e, weekStart.getTime()), 0);
+    if (g.kind === 'cap') {
+      const cap = g.max * 60;
+      const status = mins > cap ? `${fmtH(mins - cap)} OVER the ${g.max}h limit` : `${fmtH(cap - mins)} left of ${g.max}h`;
+      return `  • ${emp.name} (student): ${fmtH(mins)} of ${g.max}h — ${status}`;
+    }
+    if (g.kind === 'range') {
+      const mn = g.min * 60, mx = g.max * 60;
+      const status = mins < mn ? `${fmtH(mn - mins)} below the ${g.min}h minimum` : mins > mx ? `${fmtH(mins - mx)} over the ${g.max}h maximum` : `within ${g.min}–${g.max}h target`;
+      return `  • ${emp.name} (contract ${g.min}–${g.max}h): ${fmtH(mins)} — ${status}`;
+    }
+    const t = g.target * 60;
+    const status = mins >= t ? `target met` : `${fmtH(t - mins)} left of ${g.target}h`;
+    return `  • ${emp.name} (target ${g.target}h): ${fmtH(mins)} — ${status}`;
+  }).filter(Boolean);
+
   // Recent clock in/out log (last 40 shifts, newest first) — lets the agent
   // answer "who clocked in/out" and break down hours by any day/week/month.
   const recentShifts = [...timeEntries]
@@ -182,6 +210,8 @@ ${todayHours.length ? todayHours.join('\n') : '  • None recorded'}
 ${weekHours.length ? weekHours.join('\n') : '  • None recorded'}
   Hours THIS MONTH:
 ${monthHours.length ? monthHours.join('\n') : '  • None recorded'}
+  WEEKLY HOURS vs TARGET (student = weekly limit, contract = min–max, casual = target):
+${weeklyTargetLines.length ? weeklyTargetLines.join('\n') : '  • No targets set'}
   RECENT CLOCK IN/OUT LOG (newest first — use this to break down any specific day/week/month or list who clocked in/out):
 ${recentShifts.length ? recentShifts.join('\n') : '  • No shifts recorded'}`;
 
