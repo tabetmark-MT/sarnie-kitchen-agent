@@ -254,10 +254,18 @@ ${recentShifts.length ? recentShifts.join('\n') : '  • No shifts recorded'}`;
   const menu = settings.allergen_menu?.menus?.[0];
   const menuItems = menu?.items?.length || 0;
 
+  // Probe calibration (DK-016) — computed here so the KPI snapshot can use it
+  const probeAll = settings.probe_calibration || [];
+  const cals = probeAll.filter(e => e.kind === 'cal').sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date));
+  const lastCal = cals[0];
+  const calDays = lastCal ? Math.floor((Date.now() - new Date(lastCal.createdAt || lastCal.date)) / 86400000) : null;
+  const calDue = calDays === null || calDays >= 7;
+
   const kpiBlock = `
 KPI SNAPSHOT (today — computed, use these for clean reports):
   🧹 CLEANING — Opening: ${secMark('opening')}; Service/During: ${secMark('during')}; Closing: ${secMark('closing')}
   🌡️ FOOD SAFETY — Cook-chill entries today: ${cookToday}; Hot-holding entries today: ${hotToday}
+  🌡️ PROBE CALIBRATION — ${lastCal ? `last ${calDays}d ago, ${lastCal.pass ? 'PASS' : 'FAIL'}${calDue ? ' (DUE)' : ''}` : 'never (DUE)'}
   🚚 DELIVERIES — Today: ${todayDeliv.length} (rejected: ${rejected}, partial: ${partial}, temperature failures: ${tempFails})
   🏢 SUPPLIERS — Expired certificates: ${expiredCerts}
   🥜 ALLERGENS — Matrix items declared: ${menuItems}
@@ -289,6 +297,16 @@ COMPLIANCE TRENDS (rolling, computed):
   Allergen 4-weekly review: ${allergenTxt}
   Food-safety logs last 7 days: cook-chill ${cook7}, hot-holding ${hot7}`;
 
+  // ── Probe thermometer calibration (DK-016) — narrative block ──
+  const methodName = (m) => (m === 'boil' ? 'boiling water' : 'ice water');
+  const lastWipe = probeAll.filter(e => e.kind === 'wipe').sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date))[0];
+  const probeBlock = `
+PROBE CALIBRATION (DK-016 — should be done weekly):
+  ${lastCal
+    ? `Last calibrated ${new Date(lastCal.createdAt || lastCal.date).toLocaleDateString('en-GB')} (${calDays} day${calDays !== 1 ? 's' : ''} ago) — ${methodName(lastCal.method)} read ${lastCal.reading}°C, ${lastCal.pass ? 'PASS' : 'FAIL'}.${calDue ? ' STATUS: DUE NOW.' : ' STATUS: up to date.'}`
+    : 'No calibration on record — STATUS: DUE NOW.'}
+  ${lastWipe ? `Probe wipes: ${lastWipe.inStock ? 'in stock' : 'OUT of stock' + (lastWipe.reordered ? ' (re-ordered)' : ' (NOT re-ordered)')} as of ${new Date(lastWipe.date).toLocaleDateString('en-GB')}.` : 'Probe wipe stock: not checked recently.'}`;
+
   // ── HACCP / compliance document library ──
   const docs = settings.documents || [];
   const byCat = {};
@@ -315,6 +333,7 @@ EXPECTED DAILY CHECKLISTS:
   NOTE: Fridge temperature checks are part of the daily cleaning checklist (Opening + Closing sections), NOT a separate log. If Opening and Closing are completed, fridge temps ARE covered — do not report them as missing.
 
 ${complianceBlock}
+${probeBlock}
 
 ${employeeBlock}
 ${docBlock}
