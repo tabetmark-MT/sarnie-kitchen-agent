@@ -202,8 +202,20 @@ export async function buildKitchenContext() {
       return `  • ${nameFor(e.employeeId, e.employeeName)} — ${dayStr}: ${inStr} → ${outStr} (${dur})${e.editedBy ? ' [edited]' : ''}`;
     });
 
+  // Explicit "clocked in today" list (exact in→out times) so reports are precise.
+  const clockedInToday = timeEntries
+    .filter(e => new Date(e.clockIn).getTime() >= startOfToday.getTime())
+    .sort((a, b) => new Date(a.clockIn) - new Date(b.clockIn))
+    .map(e => {
+      const inS = new Date(e.clockIn).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+      const outS = e.clockOut ? new Date(e.clockOut).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'on shift now';
+      return `  • ${nameFor(e.employeeId, e.employeeName)}: ${inS} → ${outS} (${fmtH(entryMins(e, 0))})`;
+    });
+
   const employeeBlock = `
 EMPLOYEE MANAGEMENT (clock in/out & hours — Monday is the start of the week):
+  CLOCKED IN TODAY (${clockedInToday.length}) — this is the COMPLETE list of everyone who clocked in today; nobody else did:
+${clockedInToday.length ? clockedInToday.join('\n') : '  • Nobody has clocked in today'}
   Currently on shift (${onShift.length}): ${onShift.length ? onShift.join(', ') : 'nobody clocked in'}
   Hours TODAY:
 ${todayHours.length ? todayHours.join('\n') : '  • None recorded'}
