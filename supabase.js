@@ -96,9 +96,10 @@ export async function getSettings() {
 
 // ── Build a rich context summary for Claude ───────────────────────────────
 export async function buildKitchenContext() {
-  const [todayC, yesterdayC, users, audit, settings] = await Promise.all([
+  const [todayC, yesterdayC, recentC, users, audit, settings] = await Promise.all([
     getTodayCompletions(),
     getYesterdayCompletions(),
+    getCompletionsRange(35),
     getUsers(),
     getRecentAudit(30),
     getSettings(),
@@ -250,6 +251,40 @@ KPI SNAPSHOT (today — computed, use these for clean reports):
   🥜 ALLERGENS — Matrix items declared: ${menuItems}
   👷 EMPLOYEES — On shift now: ${onShift.length}; staff with hours today: ${todayHours.length}`;
 
+  // ── Compliance trends (from last ~35 days of completions) ──
+  const dayKey = (d) => new Date(d).toLocaleDateString('en-CA');
+  const dailyByDay = {};
+  recentC.filter(c => cid(c) === 'daily').forEach(c => { (dailyByDay[dayKey(c.date)] ||= new Set()).add(sid(c)); });
+  const dayComplete = (set) => set.has('full') || (set.has('opening') && set.has('during') && set.has('closing'));
+  const lastNkeys = (n) => [...Array(n)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - i); return dayKey(d); });
+  const daily7 = lastNkeys(7).filter(k => dailyByDay[k] && dayComplete(dailyByDay[k])).length;
+  const daily30 = lastNkeys(30).filter(k => dailyByDay[k] && dayComplete(dailyByDay[k])).length;
+  const weeklyDone = recentC.some(c => cid(c) === 'weekly' && new Date(c.date) >= weekStart);
+  const monthlyDone = recentC.some(c => cid(c) === 'monthly' && new Date(c.date) >= monthStart);
+  const allergenRev = recentC.filter(c => cid(c) === 'allergen_monthly').sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+  const allergenTxt = allergenRev
+    ? `last on ${new Date(allergenRev.date).toLocaleDateString('en-GB')} (${Math.floor((Date.now() - new Date(allergenRev.date)) / 86400000)} days ago)`
+    : 'no review in the last 35 days';
+  const set7 = new Set(lastNkeys(7));
+  const cook7 = recentC.filter(c => cid(c) === 'cookchill' && set7.has(dayKey(c.date))).length;
+  const hot7 = recentC.filter(c => cid(c) === 'hotholding' && set7.has(dayKey(c.date))).length;
+
+  const complianceBlock = `
+COMPLIANCE TRENDS (rolling, computed):
+  Daily cleaning fully completed: ${daily7}/7 days (last week), ${daily30}/30 days (last month)
+  Weekly deep clean (this week): ${weeklyDone ? 'done' : 'NOT yet'}
+  Monthly audit (this month): ${monthlyDone ? 'done' : 'NOT yet'}
+  Allergen 4-weekly review: ${allergenTxt}
+  Food-safety logs last 7 days: cook-chill ${cook7}, hot-holding ${hot7}`;
+
+  // ── HACCP / compliance document library ──
+  const docs = settings.documents || [];
+  const byCat = {};
+  docs.forEach(d => { (byCat[d.category || 'Other'] ||= []).push(d.title || d.name || 'Untitled'); });
+  const docBlock = `
+DOCUMENT LIBRARY (HACCP & compliance documents on file — ${docs.length} total):
+${docs.length ? Object.entries(byCat).map(([cat, titles]) => `  • ${cat} (${titles.length}): ${titles.slice(0, 8).join('; ')}${titles.length > 8 ? '; …' : ''}`).join('\n') : '  • No documents on file'}`;
+
   return `
 TODAY: ${today}
 ${kpiBlock}
@@ -267,7 +302,10 @@ EXPECTED DAILY CHECKLISTS:
   • Closing clean (closing section) — INCLUDES the fridge temperature checks again at close
   NOTE: Fridge temperature checks are part of the daily cleaning checklist (Opening + Closing sections), NOT a separate log. If Opening and Closing are completed, fridge temps ARE covered — do not report them as missing.
 
+${complianceBlock}
+
 ${employeeBlock}
+${docBlock}
 
 RECENT AUDIT EVENTS:
 ${audit.slice(0, 10).map(a => `  • ${new Date(a.timestamp).toLocaleString('en-GB')} — ${a.action}: ${a.detail || ''}`).join('\n')}
