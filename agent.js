@@ -32,9 +32,38 @@ Fridge temperature checks are NOT a separate log. They are built into the DAILY 
 - The Closing section logs them again at the end of the day.
 So if the daily Opening and Closing checks are completed, the fridge temperatures HAVE been recorded. Never report fridge temperature checks as "missing" or "not logged" when Opening/Closing are done — that is incorrect. Cook-chill and hot-holding logs are separate and additional.
 
-Tone: professional but friendly. Use emojis sparingly. Be direct and brief — Max is busy running a kitchen.
-Format responses for Telegram (plain text, use line breaks, avoid markdown tables).
-Always respond in English.`;
+Tone: professional but friendly. Be direct — Mark is busy running a kitchen. Always respond in English.
+
+FORMATTING — clean KPI reports (Telegram renders HTML):
+- Use HTML tags ONLY: <b>…</b> for titles/labels/key numbers, <i> for hints. NEVER use markdown (*, #, -, tables) — it shows as raw characters. Never output any other HTML tag or stray < > & characters.
+- Lead with the metric, then the label: "<b>100%</b> Opening" not "Opening: done".
+- Use status emojis as traffic lights: ✅ done/passing · ⚠️ attention · ❌ fail/missing · 🟢🟡🔴 overall health.
+- Keep it scannable: a blank line between sections, one KPI per line, short.
+- End every report with a "<b>📌 Bottom line</b>" — overall 🟢/🟡/🔴 + the single most important action (or "All clear ✅").
+- Use the KPI SNAPSHOT block in the data as your source of truth for numbers; never invent figures.
+
+DAILY ALL-SECTIONS REPORT — when Mark asks for a "daily report", "full report", "report on all sections" or similar, produce this exact structure (omit a metric only if there's genuinely no data):
+
+<b>📊 Sarnie Social — Daily Report</b>
+[weekday, date]
+
+<b>🧹 Cleaning</b>
+✅/⚠️ Opening · Service · Closing — plus weekly/monthly if relevant
+
+<b>🌡️ Food Safety</b>
+Cook-chill &amp; hot-holding entries + flag any temperature failures
+
+<b>🚚 Deliveries</b>
+Count today · rejected/partial · temp failures · ⚠️ expired supplier certs
+
+<b>🥜 Allergens</b>
+Matrix items declared · review status
+
+<b>👷 Employees</b>
+On shift now · hours today · anyone over a student limit / under a contract minimum
+
+<b>📌 Bottom line</b>
+🟢/🟡/🔴 overall + top action needed`;
 
 // ── Morning debrief report ─────────────────────────────────────────────────
 export async function generateMorningDebrief() {
@@ -76,7 +105,7 @@ export async function handleMessage(userText, userName) {
 
   const msg = await claude.messages.create({
     model: 'claude-opus-4-5',
-    max_tokens: 800,
+    max_tokens: 1400,
     system: SYSTEM_PROMPT,
     messages: [
       {
@@ -94,21 +123,22 @@ export async function handleCommand(command, userName) {
   const context = await buildKitchenContext();
 
   const prompts = {
-    '/start':     `Introduce yourself briefly to ${userName}. Tell them what you can do (morning reports, answer questions, check compliance). Keep it under 5 lines.`,
-    '/report':    `Give a quick status report for today based on this data:\n${context}`,
+    '/start':     `Introduce yourself briefly to ${userName}. Tell them what you can do (daily reports, answer questions, check compliance). Keep it under 5 lines.`,
+    '/daily':     `Produce the full DAILY ALL-SECTIONS REPORT (cleaning, food safety, deliveries, allergens, employees) exactly in the layout from your instructions, using the KPI SNAPSHOT and data below. Make it a clean, scannable KPI report.\n${context}`,
+    '/report':    `Give a concise KPI status report for today (key metrics per section + bottom line) based on this data:\n${context}`,
     '/yesterday': `Summarise what happened yesterday in the kitchen based on this data:\n${context}`,
     '/temps':     `List all temperature readings from today and yesterday. Flag any that are out of range (hot holding <63°C, fridge >8°C). Data:\n${context}`,
     '/staff':     `Who has been active in the kitchen today? What did they complete? Data:\n${context}`,
     '/overdue':   `What checklists or tasks are overdue or missed? Be specific. Data:\n${context}`,
     '/backup':    `Tell ${userName} that a manual backup has been triggered and will complete shortly.`,
-    '/help':      `List all available commands with a one-line description of each. Commands: /report, /yesterday, /temps, /staff, /overdue, /backup, /help. Also mention they can ask free-form questions.`,
+    '/help':      `List all available commands with a one-line description of each. Commands: /daily, /report, /yesterday, /temps, /staff, /overdue, /backup, /help. Also mention they can ask free-form questions (e.g. "send me a daily report on all sections").`,
   };
 
   const prompt = prompts[command] || prompts['/report'];
 
   const msg = await claude.messages.create({
     model: 'claude-opus-4-5',
-    max_tokens: 600,
+    max_tokens: command === '/daily' ? 1600 : 900,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: prompt }],
   });

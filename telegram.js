@@ -2,16 +2,18 @@ const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const BASE  = `https://api.telegram.org/bot${TOKEN}`;
 
 export async function sendMessage(chatId, text, opts = {}) {
-  await fetch(`${BASE}/sendMessage`, {
+  const post = (body) => fetch(`${BASE}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      parse_mode: 'HTML',
-      ...opts,
-    }),
+    body: JSON.stringify({ chat_id: chatId, text, ...body }),
   });
+  // Send as HTML (for <b> KPI formatting); if Telegram rejects the markup,
+  // retry as plain text so a report is never lost to a formatting error.
+  const res = await post({ parse_mode: 'HTML', ...opts });
+  try {
+    const data = await res.clone().json();
+    if (!data.ok) await post({ ...opts });
+  } catch { /* ignore */ }
 }
 
 export async function setWebhook(url) {

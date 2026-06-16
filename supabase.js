@@ -215,8 +215,45 @@ ${weeklyTargetLines.length ? weeklyTargetLines.join('\n') : '  • No targets se
   RECENT CLOCK IN/OUT LOG (newest first — use this to break down any specific day/week/month or list who clocked in/out):
 ${recentShifts.length ? recentShifts.join('\n') : '  • No shifts recorded'}`;
 
+  // ── KPI snapshot (computed across all sections, for clean reports) ──
+  const cid = (c) => c.checklist_id || c.checklistId;
+  const sid = (c) => c.section_id || c.sectionId;
+  const dailyToday = todayC.filter(c => cid(c) === 'daily');
+  const secSet = new Set(dailyToday.map(sid));
+  const fullDay = secSet.has('full');
+  const secMark = (s) => (fullDay || secSet.has(s)) ? 'done' : 'NOT done';
+  const cookToday = todayC.filter(c => cid(c) === 'cookchill').length;
+  const hotToday  = todayC.filter(c => cid(c) === 'hotholding').length;
+  const deliveries = settings.delivery_log || [];
+  const todayDeliv = deliveries.filter(d => new Date(d.date) >= startOfToday);
+  const rejected = todayDeliv.filter(d => d.outcome === 'rejected').length;
+  const partial  = todayDeliv.filter(d => d.outcome === 'partial').length;
+  const tempFails = todayDeliv.reduce((n, d) => n + ((d.items || []).filter(i => {
+    const t = parseFloat(i.temp);
+    if (i.type === 'ambient' || isNaN(t)) return false;
+    if (i.type === 'chilled') return t > 8;
+    if (i.type === 'frozen')  return t > -18;
+    if (i.type === 'hot')     return t < 63;
+    return false;
+  }).length), 0);
+  const suppliers = settings.suppliers || [];
+  const expiredCerts = suppliers.reduce((n, s) => n + ((s.certificates || []).filter(c => c.expiryDate && new Date(c.expiryDate) < new Date()).length), 0);
+  const menu = settings.allergen_menu?.menus?.[0];
+  const menuItems = menu?.items?.length || 0;
+
+  const kpiBlock = `
+KPI SNAPSHOT (today — computed, use these for clean reports):
+  🧹 CLEANING — Opening: ${secMark('opening')}; Service/During: ${secMark('during')}; Closing: ${secMark('closing')}
+  🌡️ FOOD SAFETY — Cook-chill entries today: ${cookToday}; Hot-holding entries today: ${hotToday}
+  🚚 DELIVERIES — Today: ${todayDeliv.length} (rejected: ${rejected}, partial: ${partial}, temperature failures: ${tempFails})
+  🏢 SUPPLIERS — Expired certificates: ${expiredCerts}
+  🥜 ALLERGENS — Matrix items declared: ${menuItems}
+  👷 EMPLOYEES — On shift now: ${onShift.length}; staff with hours today: ${todayHours.length}`;
+
   return `
 TODAY: ${today}
+${kpiBlock}
+
 ACTIVE STAFF: ${users.map(u => `${u.name} (${u.role})`).join(', ')}
 
 TODAY'S COMPLETIONS (${todayC.length}):
