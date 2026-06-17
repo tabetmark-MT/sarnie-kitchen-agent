@@ -20,7 +20,7 @@ app.use(express.json());
 app.get('/', (req, res) => res.json({
   status: 'ok',
   agent: 'Sarnie Kitchen Agent',
-  build: '2026-06-17-employee-mgmt',
+  build: '2026-06-17-autodeploy-test',
   features: ['employee-management', 'clocked-in-today', 'weekly-targets', 'kpi-reports', 'compliance-trends', 'probe-calibration', 'document-library'],
   time: new Date().toISOString(),
 }));
