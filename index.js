@@ -17,7 +17,13 @@ const BACKUP_MINUTE   = process.env.BACKUP_MINUTE  || '0';
 app.use(express.json());
 
 // ── Health check ──────────────────────────────────────────────────────────
-app.get('/', (req, res) => res.json({ status: 'ok', agent: 'Sarnie Kitchen Agent', time: new Date().toISOString() }));
+app.get('/', (req, res) => res.json({
+  status: 'ok',
+  agent: 'Sarnie Kitchen Agent',
+  build: '2026-06-17-employee-mgmt',
+  features: ['employee-management', 'clocked-in-today', 'weekly-targets', 'kpi-reports', 'compliance-trends', 'probe-calibration', 'document-library'],
+  time: new Date().toISOString(),
+}));
 
 // ── External backup trigger ─────────────────────────────────────────────────
 // Lets a free scheduler (e.g. cron-job.org) run the backup at 23:00 even when
