@@ -3,6 +3,7 @@ import cron    from 'node-cron';
 import { sendMessage, setWebhook, parseUpdate } from './telegram.js';
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
 import { runNightlyBackup, formatBackupResult } from './backup.js';
+import { runAutoClockOut, formatAutoClockOut } from './autoClockout.js';
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -21,15 +22,31 @@ app.get('/', (req, res) => res.json({
   status: 'ok',
   agent: 'Sarnie Kitchen Agent',
   build: 'live',
-  features: ['employee-management', 'clocked-in-today', 'weekly-targets', 'kpi-reports', 'compliance-trends', 'probe-calibration', 'document-library'],
+  features: ['employee-management', 'clocked-in-today', 'weekly-targets', 'kpi-reports', 'compliance-trends', 'probe-calibration', 'document-library', 'auto-clockout'],
   time: new Date().toISOString(),
 }));
 
 // ── External backup trigger ─────────────────────────────────────────────────
 // Lets a free scheduler (e.g. cron-job.org) run the backup at 23:00 even when
 // the free Render instance has gone to sleep — the request itself wakes it.
+// Auto clock-out anyone who forgot, then notify the manager. Safe to call
+// repeatedly (idempotent). Never throws — a clock-out hiccup must not block backup.
+async function runAutoClockOutAndNotify() {
+  try {
+    const result = await runAutoClockOut();
+    const msg = formatAutoClockOut(result);
+    if (msg) await sendMessage(OWNER_CHAT_ID, msg);
+    if (result.closed.length) console.log(`[AutoClockOut] closed ${result.closed.length} shift(s)`);
+    return result;
+  } catch (err) {
+    console.error('[AutoClockOut] failed:', err.message);
+    return { ok: false, error: err.message, closed: [] };
+  }
+}
+
 async function triggerBackup(res) {
   try {
+    await runAutoClockOutAndNotify(); // forgot-to-clock-out check rides the nightly trigger
     const result = await runNightlyBackup();
     // Stay silent when another scheduler already backed up today (de-dup), and
     // when Dropbox simply isn't configured yet. Only notify on a real backup/error.
@@ -46,6 +63,12 @@ async function triggerBackup(res) {
 }
 app.get(`/tasks/backup/${WEBHOOK_SECRET}`,  (req, res) => triggerBackup(res));
 app.post(`/tasks/backup/${WEBHOOK_SECRET}`, (req, res) => triggerBackup(res));
+
+// Standalone auto clock-out trigger (also runs as part of the nightly backup).
+app.all(`/tasks/clockout/${WEBHOOK_SECRET}`, async (req, res) => {
+  const result = await runAutoClockOutAndNotify();
+  res.json(result);
+});
 
 // ── Telegram webhook ──────────────────────────────────────────────────────
 app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
@@ -102,8 +125,9 @@ cron.schedule(`${MORNING_MINUTE} ${MORNING_HOUR} * * *`, async () => {
 
 // ── Nightly off-site backup cron (Europe/London) ────────────────────────────
 cron.schedule(`${BACKUP_MINUTE} ${BACKUP_HOUR} * * *`, async () => {
-  console.log('[Cron] Running nightly Dropbox backup...');
+  console.log('[Cron] Running nightly auto clock-out + Dropbox backup...');
   try {
+    await runAutoClockOutAndNotify(); // close anyone who forgot to clock out at 22:00
     const result = await runNightlyBackup();
     console.log('[Cron] Backup:', result.skipped ? '↩︎ already done today' : result.ok ? `✅ ${result.path}` : `⚠️ ${result.reason}`);
     // Stay silent if already done today (another scheduler) or not configured.
