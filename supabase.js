@@ -1,8 +1,22 @@
 import { createClient } from '@supabase/supabase-js';
 
+// The agent is a trusted server-side backend, so it reads with the service_role
+// key (bypasses RLS). The DB is now locked down — the public anon key returns
+// nothing — so anon would make every report and backup come back empty.
+// Falls back to the anon key only if the service key isn't set.
+const SUPABASE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_KEY ||
+  process.env.SUPABASE_ANON_KEY;
+
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY && !process.env.SUPABASE_SERVICE_KEY) {
+  console.warn('[Supabase] SERVICE_ROLE key not set — reads will be empty under RLS. Set SUPABASE_SERVICE_ROLE_KEY in Render.');
+}
+
 export const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
+  SUPABASE_KEY,
+  { auth: { persistSession: false, autoRefreshToken: false } }
 );
 
 // ── Fetch today's completions ──────────────────────────────────────────────
