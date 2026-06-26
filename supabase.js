@@ -311,6 +311,80 @@ COMPLIANCE TRENDS (rolling, computed):
   Allergen 4-weekly review: ${allergenTxt}
   Food-safety logs last 7 days: cook-chill ${cook7}, hot-holding ${hot7}`;
 
+  // ── Fridge temperature analytics (per appliance, from daily Opening/Closing) ──
+  // Matches the in-app dashboard "Fridge temperatures — 30 days" card.
+  const FRIDGE_TASKS = {
+    'd-o-1': 'Undercounter fridge',        'd-c-11a': 'Undercounter fridge',
+    'd-o-2': 'Three-door counter fridge',  'd-c-11b': 'Three-door counter fridge',
+    'd-o-3': 'Single door upright fridge', 'd-c-11c': 'Single door upright fridge',
+    'd-o-4': 'Three-door saladette',       'd-c-11d': 'Three-door saladette',
+  };
+  const fridgeStat = (t) => (t <= 5 ? 'PASS' : t <= 8 ? 'WARN' : 'FAIL');
+  const set30 = new Set(lastNkeys(30));
+  const fridgeReadings = {};
+  recentC.filter(c => cid(c) === 'daily' && set30.has(dayKey(c.date))).forEach(c => {
+    const temps = c.temperatures || {};
+    Object.entries(temps).forEach(([tid, val]) => {
+      const name = FRIDGE_TASKS[tid]; if (!name) return;
+      const t = parseFloat(val); if (isNaN(t)) return;
+      (fridgeReadings[name] ||= []).push({ date: c.date, t });
+    });
+  });
+  const fridgeLines = Object.entries(fridgeReadings).map(([name, arr]) => {
+    arr.sort((a, b) => new Date(a.date) - new Date(b.date));
+    const n = arr.length;
+    const pass = arr.filter(r => fridgeStat(r.t) === 'PASS').length;
+    const fails = arr.filter(r => fridgeStat(r.t) === 'FAIL').length;
+    const warns = arr.filter(r => fridgeStat(r.t) === 'WARN').length;
+    const passRate = Math.round((pass / n) * 100);
+    const avg = Math.round((arr.reduce((s, r) => s + r.t, 0) / n) * 10) / 10;
+    const latest = arr[n - 1].t;
+    let drift = '';
+    if (n >= 6) {
+      const k = Math.floor(n / 3), e = arr.slice(0, k), l = arr.slice(n - k);
+      const d = Math.round((l.reduce((s, r) => s + r.t, 0) / l.length - e.reduce((s, r) => s + r.t, 0) / e.length) * 10) / 10;
+      if (d >= 1) drift = ` — TRENDING WARMER (+${d}°C, check before it fails)`;
+    }
+    return `  • ${name}: ${passRate}% pass (${n} readings, avg ${avg}°C, latest ${latest}°C${fails ? `, ${fails} FAIL` : ''}${warns ? `, ${warns} warn` : ''})${drift}`;
+  }).sort();
+  const fridgeBlock = `
+FRIDGE TEMPERATURE ANALYTICS (last 30 days, per appliance — from the daily Opening & Closing checks; FSA limit ≤5°C, ≤8°C tolerable, >8°C = fail):
+${fridgeLines.length ? fridgeLines.join('\n') : '  • No fridge temperatures logged in the last 30 days'}`;
+
+  // ── KPI dashboard: this week vs last (mirrors the in-app dashboard) ──
+  const STRUCT_NOTE = /^(hh-(type|food|time|stage|batch|outcome|duration|readings)|cc-(food|batch|cookStart|method|chillBatch|storageFd|storageBatch|storageType|storageUB|storageLabel))/;
+  const noteCount = (c) => {
+    const tn = c.taskNotes || c.task_notes || {};
+    let k = Object.entries(tn).filter(([key, v]) => v && String(v).trim() && !STRUCT_NOTE.test(key)).length;
+    if ((c.notes || '').trim()) k++;
+    return k;
+  };
+  const compliancePct = (recs) => {
+    if (!recs.length) return null;
+    const vals = recs.map(c => { const t = Object.values(c.tasks || {}); return t.length ? t.filter(Boolean).length / t.length : 0; });
+    return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100);
+  };
+  const wkStartMs = weekStart.getTime(), prevStartMs = wkStartMs - 7 * 86400000;
+  const inWin = (from, to) => recentC.filter(c => { const t = new Date(c.date).getTime(); return t >= from && t < to; });
+  const curWk = inWin(wkStartMs, nowMs + 1), prevWk = inWin(prevStartMs, wkStartMs);
+  const activeDaysOf = (recs) => new Set(recs.map(c => dayKey(c.date))).size;
+  const flaggedSum = (recs) => recs.reduce((s, c) => s + noteCount(c), 0);
+  const delta = (cur, prev, suffix = '') => {
+    if (cur == null) return 'n/a';
+    if (prev == null) return `${cur}${suffix} (no prior week)`;
+    const d = Math.round((cur - prev) * 10) / 10;
+    return `${cur}${suffix} (${d > 0 ? '+' : ''}${d}${suffix} vs last week)`;
+  };
+  const trendVals = lastNkeys(14).map(k => compliancePct(recentC.filter(c => dayKey(c.date) === k))).filter(v => v != null);
+  const trendAvg = trendVals.length ? Math.round(trendVals.reduce((a, b) => a + b, 0) / trendVals.length) : null;
+  const kpiDashBlock = `
+KPI DASHBOARD (this week vs last — the same figures the manager sees on the app dashboard; week starts Monday):
+  Compliance %: ${delta(compliancePct(curWk), compliancePct(prevWk), '%')}
+  Records logged: ${delta(curWk.length, prevWk.length)}
+  Flagged items (genuine notes/corrective actions only): ${delta(flaggedSum(curWk), flaggedSum(prevWk))}
+  Active days: ${delta(activeDaysOf(curWk), activeDaysOf(prevWk))} of 7
+  14-day compliance trend average: ${trendAvg != null ? trendAvg + '%' : 'n/a'}`;
+
   // ── Probe thermometer calibration (DK-016) — narrative block ──
   const methodName = (m) => (m === 'boil' ? 'boiling water' : 'ice water');
   const lastWipe = probeAll.filter(e => e.kind === 'wipe').sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date))[0];
@@ -347,6 +421,8 @@ EXPECTED DAILY CHECKLISTS:
   NOTE: Fridge temperature checks are part of the daily cleaning checklist (Opening + Closing sections), NOT a separate log. If Opening and Closing are completed, fridge temps ARE covered — do not report them as missing.
 
 ${complianceBlock}
+${kpiDashBlock}
+${fridgeBlock}
 ${probeBlock}
 
 ${employeeBlock}

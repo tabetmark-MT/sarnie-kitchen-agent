@@ -87,9 +87,10 @@ app.post('/chat', async (req, res) => {
     const { message, token } = req.body || {};
     if (!message || !String(message).trim()) return res.status(400).json({ error: 'Empty message' });
 
-    // Verify the caller has a valid Supabase session.
+    // Verify the caller has a valid Supabase session AND is an admin.
     const { data, error } = await supabase.auth.getUser(token || '');
     if (error || !data?.user) return res.status(401).json({ error: 'Please sign in again.' });
+    if (data.user.user_metadata?.role !== 'admin') return res.status(403).json({ error: 'The assistant is available to admins only.' });
 
     const name = data.user.user_metadata?.name || 'there';
     const reply = await handleMessage(String(message).slice(0, 2000), name);
