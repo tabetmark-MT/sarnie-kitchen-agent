@@ -4,6 +4,7 @@ import { sendMessage, setWebhook, parseUpdate } from './telegram.js';
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
 import { runNightlyBackup, formatBackupResult } from './backup.js';
 import { runAutoClockOut, formatAutoClockOut } from './autoClockout.js';
+import { supabase } from './supabase.js';
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -68,6 +69,35 @@ app.post(`/tasks/backup/${WEBHOOK_SECRET}`, (req, res) => triggerBackup(res));
 app.all(`/tasks/clockout/${WEBHOOK_SECRET}`, async (req, res) => {
   const result = await runAutoClockOutAndNotify();
   res.json(result);
+});
+
+// ── In-app assistant (chat from the website) ────────────────────────────────
+// Reuses the same Claude + live kitchen context as Telegram. Gated by the
+// caller's Supabase session token (only logged-in users); the app further
+// limits the UI to chef level and above.
+const chatCors = (res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Headers', '*');
+  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+};
+app.options('/chat', (req, res) => { chatCors(res); res.sendStatus(204); });
+app.post('/chat', async (req, res) => {
+  chatCors(res);
+  try {
+    const { message, token } = req.body || {};
+    if (!message || !String(message).trim()) return res.status(400).json({ error: 'Empty message' });
+
+    // Verify the caller has a valid Supabase session.
+    const { data, error } = await supabase.auth.getUser(token || '');
+    if (error || !data?.user) return res.status(401).json({ error: 'Please sign in again.' });
+
+    const name = data.user.user_metadata?.name || 'there';
+    const reply = await handleMessage(String(message).slice(0, 2000), name);
+    res.json({ reply });
+  } catch (err) {
+    console.error('[Chat] error:', err.message);
+    res.status(500).json({ error: 'Something went wrong. Try again.' });
+  }
 });
 
 // ── Telegram webhook ──────────────────────────────────────────────────────
