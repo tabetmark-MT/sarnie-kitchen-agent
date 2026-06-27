@@ -273,13 +273,20 @@ ${recentShifts.length ? recentShifts.join('\n') : '  • No shifts recorded'}`;
   const cals = probeAll.filter(e => e.kind === 'cal').sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date));
   const lastCal = cals[0];
   const calDays = lastCal ? Math.floor((Date.now() - new Date(lastCal.createdAt || lastCal.date)) / 86400000) : null;
-  const calDue = calDays === null || calDays >= 7;
+  // Two-point weekly calibration (DK-016): BOTH ice (0°C) AND boiling (100°C)
+  // must be logged this week to count as complete.
+  const calsThisWeek = cals.filter(e => new Date(e.createdAt || e.date) >= weekStart);
+  const hasIce  = calsThisWeek.some(e => e.method === 'ice');
+  const hasBoil = calsThisWeek.some(e => e.method === 'boil');
+  const bothPoints = hasIce && hasBoil;
+  const pendingPoint = !hasIce ? 'ice-water (0°C)' : !hasBoil ? 'boiling-water (100°C)' : null;
+  const calDue = !bothPoints; // due until both points are done this week
 
   const kpiBlock = `
 KPI SNAPSHOT (today — computed, use these for clean reports):
   🧹 CLEANING — Opening: ${secMark('opening')}; Service/During: ${secMark('during')}; Closing: ${secMark('closing')}
   🌡️ FOOD SAFETY — Cook-chill entries today: ${cookToday}; Hot-holding entries today: ${hotToday}
-  🌡️ PROBE CALIBRATION — ${lastCal ? `last ${calDays}d ago, ${lastCal.pass ? 'PASS' : 'FAIL'}${calDue ? ' (DUE)' : ''}` : 'never (DUE)'}
+  🌡️ PROBE CALIBRATION (two-point weekly) — ${bothPoints ? 'both ice & boiling done this week ✓' : pendingPoint ? `${pendingPoint} still needed this week (DUE)` : 'never done (DUE)'}
   🚚 DELIVERIES — Today: ${todayDeliv.length} (rejected: ${rejected}, partial: ${partial}, temperature failures: ${tempFails})
   🏢 SUPPLIERS — Expired certificates: ${expiredCerts}
   🥜 ALLERGENS — Matrix items declared: ${menuItems}
@@ -348,7 +355,7 @@ COMPLIANCE TRENDS (rolling, computed):
     return `  • ${name}: ${passRate}% pass (${n} readings, avg ${avg}°C, latest ${latest}°C${fails ? `, ${fails} FAIL` : ''}${warns ? `, ${warns} warn` : ''})${drift}`;
   }).sort();
   const fridgeBlock = `
-FRIDGE TEMPERATURE ANALYTICS (last 30 days, per appliance — from the daily Opening & Closing checks; FSA limit ≤5°C, ≤8°C tolerable, >8°C = fail):
+FRIDGE TEMPERATURE ANALYTICS (last 30 days, per appliance — fridge temps are recorded TWICE daily: morning in the Opening check and evening in the Closing check; FSA limit ≤5°C, ≤8°C tolerable, >8°C = fail). There is a dedicated Fridge Temperature report in the app (Reports → Fridges) and it's also included in the EHO Records Pack:
 ${fridgeLines.length ? fridgeLines.join('\n') : '  • No fridge temperatures logged in the last 30 days'}`;
 
   // ── KPI dashboard: this week vs last (mirrors the in-app dashboard) ──
@@ -389,10 +396,11 @@ KPI DASHBOARD (this week vs last — the same figures the manager sees on the ap
   const methodName = (m) => (m === 'boil' ? 'boiling water' : 'ice water');
   const lastWipe = probeAll.filter(e => e.kind === 'wipe').sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date))[0];
   const probeBlock = `
-PROBE CALIBRATION (DK-016 — should be done weekly):
+PROBE CALIBRATION (DK-016 — TWO-POINT, weekly: ice water 0°C AND boiling water 100°C, ±1°C; both points are required each week):
+  This week: ice point ${hasIce ? 'done ✓' : 'NOT done'}, boiling point ${hasBoil ? 'done ✓' : 'NOT done'}. STATUS: ${bothPoints ? 'up to date (both points this week).' : `DUE NOW — ${pendingPoint || 'no calibration'} still needed this week.`}
   ${lastCal
-    ? `Last calibrated ${new Date(lastCal.createdAt || lastCal.date).toLocaleDateString('en-GB')} (${calDays} day${calDays !== 1 ? 's' : ''} ago) — ${methodName(lastCal.method)} read ${lastCal.reading}°C, ${lastCal.pass ? 'PASS' : 'FAIL'}.${calDue ? ' STATUS: DUE NOW.' : ' STATUS: up to date.'}`
-    : 'No calibration on record — STATUS: DUE NOW.'}
+    ? `Most recent: ${new Date(lastCal.createdAt || lastCal.date).toLocaleDateString('en-GB')} (${calDays} day${calDays !== 1 ? 's' : ''} ago) — ${methodName(lastCal.method)} read ${lastCal.reading}°C, ${lastCal.pass ? 'PASS' : 'FAIL'}.`
+    : 'No calibration on record.'}
   ${lastWipe ? `Probe wipes: ${lastWipe.inStock ? 'in stock' : 'OUT of stock' + (lastWipe.reordered ? ' (re-ordered)' : ' (NOT re-ordered)')} as of ${new Date(lastWipe.date).toLocaleDateString('en-GB')}.` : 'Probe wipe stock: not checked recently.'}`;
 
   // ── HACCP / compliance document library ──
