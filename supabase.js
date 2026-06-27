@@ -334,7 +334,8 @@ COMPLIANCE TRENDS (rolling, computed):
     Object.entries(temps).forEach(([tid, val]) => {
       const name = FRIDGE_TASKS[tid]; if (!name) return;
       const t = parseFloat(val); if (isNaN(t)) return;
-      (fridgeReadings[name] ||= []).push({ date: c.date, t });
+      const period = tid.startsWith('d-o') ? 'am' : 'pm'; // Opening = morning, Closing = evening
+      (fridgeReadings[name] ||= []).push({ date: c.date, t, period });
     });
   });
   const fridgeLines = Object.entries(fridgeReadings).map(([name, arr]) => {
@@ -346,13 +347,17 @@ COMPLIANCE TRENDS (rolling, computed):
     const passRate = Math.round((pass / n) * 100);
     const avg = Math.round((arr.reduce((s, r) => s + r.t, 0) / n) * 10) / 10;
     const latest = arr[n - 1].t;
+    const am = arr.filter(r => r.period === 'am'), pm = arr.filter(r => r.period === 'pm');
+    const avgOf = (a) => a.length ? Math.round((a.reduce((s, r) => s + r.t, 0) / a.length) * 10) / 10 : null;
+    const amAvg = avgOf(am), pmAvg = avgOf(pm);
+    const ampm = (amAvg != null || pmAvg != null) ? `; morning avg ${amAvg != null ? amAvg + '°C' : 'n/a'}, evening avg ${pmAvg != null ? pmAvg + '°C' : 'n/a'}` : '';
     let drift = '';
     if (n >= 6) {
       const k = Math.floor(n / 3), e = arr.slice(0, k), l = arr.slice(n - k);
       const d = Math.round((l.reduce((s, r) => s + r.t, 0) / l.length - e.reduce((s, r) => s + r.t, 0) / e.length) * 10) / 10;
       if (d >= 1) drift = ` — TRENDING WARMER (+${d}°C, check before it fails)`;
     }
-    return `  • ${name}: ${passRate}% pass (${n} readings, avg ${avg}°C, latest ${latest}°C${fails ? `, ${fails} FAIL` : ''}${warns ? `, ${warns} warn` : ''})${drift}`;
+    return `  • ${name}: ${passRate}% pass (${n} readings, avg ${avg}°C, latest ${latest}°C${ampm}${fails ? `, ${fails} FAIL` : ''}${warns ? `, ${warns} warn` : ''})${drift}`;
   }).sort();
   const fridgeBlock = `
 FRIDGE TEMPERATURE ANALYTICS (last 30 days, per appliance — fridge temps are recorded TWICE daily: morning in the Opening check and evening in the Closing check; FSA limit ≤5°C, ≤8°C tolerable, >8°C = fail). There is a dedicated Fridge Temperature report in the app (Reports → Fridges) and it's also included in the EHO Records Pack:
