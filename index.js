@@ -5,6 +5,7 @@ import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js
 import { runNightlyBackup, formatBackupResult } from './backup.js';
 import { runAutoClockOut, formatAutoClockOut } from './autoClockout.js';
 import { supabase } from './supabase.js';
+import { authorisedIntel, buildComplianceSnapshot } from './intel.js';
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -69,6 +70,27 @@ app.post(`/tasks/backup/${WEBHOOK_SECRET}`, (req, res) => triggerBackup(res));
 app.all(`/tasks/clockout/${WEBHOOK_SECRET}`, async (req, res) => {
   const result = await runAutoClockOutAndNotify();
   res.json(result);
+});
+
+// ── Compliance intelligence snapshot (read-only, for Cowork weekly report) ───
+// Token-secured (INTEL_API_TOKEN) via Bearer header or ?token=. Optional
+// &from=YYYY-MM-DD&to=YYYY-MM-DD (London); defaults to the last 7 days.
+const intelCors = (res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Headers', '*');
+  res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+};
+app.options('/api/intel/snapshot', (req, res) => { intelCors(res); res.sendStatus(204); });
+app.get('/api/intel/snapshot', async (req, res) => {
+  intelCors(res);
+  if (!(await authorisedIntel(req))) return res.status(401).json({ error: 'Unauthorized — pass a valid token (Bearer header or ?token=)' });
+  try {
+    const snapshot = await buildComplianceSnapshot({ from: req.query.from, to: req.query.to });
+    res.json(snapshot);
+  } catch (err) {
+    console.error('[Intel] snapshot error:', err.message);
+    res.status(500).json({ error: 'Failed to build snapshot' });
+  }
 });
 
 // ── In-app assistant (chat from the website) ────────────────────────────────
