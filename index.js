@@ -35,9 +35,9 @@ app.get('/', (req, res) => res.json({
 async function runAutoClockOutAndNotify() {
   try {
     const result = await runAutoClockOut();
-    // No Telegram push (2026-06-28, Mark's request) — auto clock-out still runs,
-    // result is logged instead of messaged.
-    if (result.closed.length) console.log(`[AutoClockOut] closed ${result.closed.length} shift(s): ${formatAutoClockOut(result)}`);
+    const msg = formatAutoClockOut(result);
+    if (msg) await sendMessage(OWNER_CHAT_ID, msg);
+    if (result.closed.length) console.log(`[AutoClockOut] closed ${result.closed.length} shift(s)`);
     return result;
   } catch (err) {
     console.error('[AutoClockOut] failed:', err.message);
@@ -49,13 +49,16 @@ async function triggerBackup(res) {
   try {
     await runAutoClockOutAndNotify(); // forgot-to-clock-out check rides the nightly trigger
     const result = await runNightlyBackup();
-    // No Telegram push (2026-06-28, Mark's request) — backup still runs and its
-    // result is returned to the calling scheduler + logged, but not messaged.
-    console.log('[Backup endpoint]', result.skipped ? '↩︎ already done today' : result.ok ? `✅ ${result.path}` : `⚠️ ${result.reason}`);
+    // Stay silent when another scheduler already backed up today (de-dup), and
+    // when Dropbox simply isn't configured yet. Only notify on a real backup/error.
+    if (!result.skipped && (result.ok || !/not configured/.test(result.reason || ''))) {
+      await sendMessage(OWNER_CHAT_ID, formatBackupResult(result));
+    }
     res.json(result);
   } catch (err) {
     const detail = err.cause ? ` (${err.cause.code || err.cause})` : '';
     console.error('[Backup endpoint] failed:', err.message, detail);
+    await sendMessage(OWNER_CHAT_ID, `⚠️ Nightly Dropbox backup failed: ${err.message}${detail}`);
     res.status(500).json({ ok: false, error: err.message + detail });
   }
 }
@@ -138,11 +141,18 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
 });
 
 // ── Morning debrief cron ──────────────────────────────────────────────────
-// Morning debrief auto-push DISABLED (2026-06-28, Mark's request): the agent
-// must not send unprompted push notifications — the kitchen pad app already
-// handles push. The agent stays fully readable on demand: ask it any time
-// (e.g. /daily, /report, or a free-text question) and it replies. The
-// generateMorningDebrief function is kept available for on-demand use.
+// Fires every day at MORNING_HOUR:MORNING_MINUTE (server time = UTC)
+// Render servers run UTC, so adjust accordingly
+cron.schedule(`${MORNING_MINUTE} ${MORNING_HOUR} * * *`, async () => {
+  console.log('[Cron] Sending morning debrief...');
+  try {
+    const report = await generateMorningDebrief();
+    await sendMessage(OWNER_CHAT_ID, report);
+    console.log('[Cron] Morning debrief sent ✅');
+  } catch (err) {
+    console.error('[Cron] Failed to send morning debrief:', err.message);
+  }
+}, { timezone: 'Europe/London' });
 
 // ── Nightly off-site backup cron (Europe/London) ────────────────────────────
 cron.schedule(`${BACKUP_MINUTE} ${BACKUP_HOUR} * * *`, async () => {
@@ -151,10 +161,13 @@ cron.schedule(`${BACKUP_MINUTE} ${BACKUP_HOUR} * * *`, async () => {
     await runAutoClockOutAndNotify(); // close anyone who forgot to clock out at 22:00
     const result = await runNightlyBackup();
     console.log('[Cron] Backup:', result.skipped ? '↩︎ already done today' : result.ok ? `✅ ${result.path}` : `⚠️ ${result.reason}`);
-    // No Telegram push (2026-06-28, Mark's request): the job still runs, but it
-    // logs the result instead of messaging. Ask the agent for backup status if needed.
+    // Stay silent if already done today (another scheduler) or not configured.
+    if (!result.skipped && (result.ok || !/not configured/.test(result.reason || ''))) {
+      await sendMessage(OWNER_CHAT_ID, formatBackupResult(result));
+    }
   } catch (err) {
     console.error('[Cron] Nightly backup failed:', err.message);
+    await sendMessage(OWNER_CHAT_ID, `⚠️ Nightly Dropbox backup failed: ${err.message}`);
   }
 }, { timezone: 'Europe/London' });
 
