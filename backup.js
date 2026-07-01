@@ -48,7 +48,11 @@ export async function runNightlyBackup({ force = false } = {}) {
   };
   const json = JSON.stringify(payload, null, 2);
 
-  const folder = (process.env.DROPBOX_BACKUP_PATH || '/Sarnie Social Backups').replace(/\/$/, '');
+  // Default to the Dropbox app's own root folder (/Apps/Sarnie Social Backups).
+  // The old default added a second "Sarnie Social Backups" level — nesting.
+  // (If a DROPBOX_BACKUP_PATH env is set on Render, it still wins; clear it to
+  // use the tidy root.)
+  const folder = (process.env.DROPBOX_BACKUP_PATH || '').replace(/\/$/, '');
   const path = `${folder}/sarnie-backup-${today}.json`;
 
   await uploadToDropbox(path, Buffer.from(json, 'utf8'));
