@@ -19,6 +19,27 @@ export async function runNightlyBackup({ force = false } = {}) {
   }
 
   const data = await getAllData();
+
+  // ── Empty-read guard ────────────────────────────────────────────────────
+  // Core tables are seeded and never legitimately empty in production. If they
+  // come back empty, the read FAILED (e.g. service-role key missing / RLS lock)
+  // — as happened 24–25 Jun 2026. Abort WITHOUT uploading and WITHOUT marking
+  // the day done, so (a) the last good backup is preserved, (b) it retries, and
+  // (c) the failure is surfaced instead of silently saving an empty file.
+  const count = (t) => (Array.isArray(data?.[t]) ? data[t].length : 0);
+  const CORE = ['app_users', 'app_settings', 'checklists'];
+  const emptyCore = CORE.filter((t) => count(t) === 0);
+  if (emptyCore.length) {
+    return {
+      ok: false,
+      aborted: true,
+      reason: `backup ABORTED — core table(s) empty: ${emptyCore.join(', ')}. ` +
+        `Supabase read failed (check SUPABASE_SERVICE_ROLE_KEY / RLS). Nothing was written; ` +
+        `last good backup is preserved.`,
+      counts: Object.fromEntries(Object.keys(data || {}).map((k) => [k, count(k)])),
+    };
+  }
+
   const payload = {
     backedUpAt: new Date().toISOString(),
     source: 'sarnie-kitchen-agent',
