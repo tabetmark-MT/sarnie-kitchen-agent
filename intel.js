@@ -64,6 +64,18 @@ export async function buildComplianceSnapshot({ from, to } = {}) {
 
   const inWindow = (k) => k >= fromK && k <= toK;
   const dayKeys = []; for (let k = fromK; k <= toK; k = addDays(k, 1)) dayKeys.push(k);
+  const today = todayKey();
+
+  // Operating schedule — CLOSED days (e.g. Sunday) and the in-progress current
+  // day must never count as missed cleaning.
+  const DAY_NAMES = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  const schedule = settings.schedule || {};
+  const isClosed = (k) => {
+    if ((schedule.closures || []).includes(k)) return true;
+    const wd = new Date(k + 'T12:00:00Z').getUTCDay();
+    const day = schedule[DAY_NAMES[(wd + 6) % 7]];
+    return day ? day.open === false : false;
+  };
 
   // ── Cleaning completion per day ──
   const dailyByDay = {};
@@ -72,11 +84,17 @@ export async function buildComplianceSnapshot({ from, to } = {}) {
   const cleaningByDay = dayKeys.map(k => {
     const s = dailyByDay[k] || new Set();
     const full = s.has('full');
-    return { date: k, opening: full || s.has('opening'), during: full || s.has('during'), closing: full || s.has('closing'), complete: dayComplete(s) };
+    const closed = isClosed(k); const isToday = k === today;
+    return { date: k, closed, today: isToday,
+      opening: full || s.has('opening'), during: full || s.has('during'), closing: full || s.has('closing'),
+      complete: closed ? true : dayComplete(s),
+      status: closed ? 'closed' : isToday ? 'in-progress' : (dayComplete(s) ? 'complete' : 'incomplete') };
   });
-  const daysComplete = cleaningByDay.filter(d => d.complete).length;
-  const cleaningCompletePct = Math.round((daysComplete / days) * 100);
-  const missedClosings = cleaningByDay.filter(d => !d.closing).map(d => d.date);
+  // Only OPEN days that are fully in the past count toward compliance.
+  const expectedDays = cleaningByDay.filter(d => !d.closed && !d.today);
+  const daysComplete = expectedDays.filter(d => dayComplete(dailyByDay[d.date])).length;
+  const cleaningCompletePct = expectedDays.length ? Math.round((daysComplete / expectedDays.length) * 100) : 100;
+  const missedClosings = expectedDays.filter(d => !d.closing).map(d => d.date);
 
   // ── Fridge temperatures (daily Opening/Closing) ──
   const fridge = {};
@@ -186,7 +204,7 @@ export async function buildComplianceSnapshot({ from, to } = {}) {
     kpis: {
       cleaningCompletePct,
       daysFullyCompliant: daysComplete,
-      totalDays: days,
+      totalDays: expectedDays.length,
       weeklyDeepCleanDone: comps.some(c => cid(c) === 'weekly'),
       monthlyAuditDone: comps.some(c => cid(c) === 'monthly'),
       fridgeReadings: fridgeTotals.readings,
