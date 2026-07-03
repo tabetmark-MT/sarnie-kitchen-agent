@@ -242,6 +242,36 @@ ${weeklyTargetLines.length ? weeklyTargetLines.join('\n') : '  • No targets se
   RECENT CLOCK IN/OUT LOG (newest first — use this to break down any specific day/week/month or list who clocked in/out):
 ${recentShifts.length ? recentShifts.join('\n') : '  • No shifts recorded'}`;
 
+  // ── Employee profiles & certificates (Team tab) ──
+  const certLine = (c) => {
+    const nm = c.name || c.fileName || 'certificate';
+    if (!c.expiry) return `${nm} (no expiry set)`;
+    const days = Math.floor((new Date(c.expiry) - nowMs) / 86400000);
+    const state = days < 0 ? `EXPIRED ${-days}d ago` : days <= 60 ? `expires in ${days}d ⚠️` : `valid to ${new Date(c.expiry).toLocaleDateString('en-GB')}`;
+    return `${nm} — ${state}`;
+  };
+  const profileLine = (emp) => {
+    const type = emp.empType === 'student' ? `student (weekly cap ${Number(emp.weeklyHours) || 20}h)`
+      : emp.empType === 'contract' ? `contract (${Number(emp.weeklyMin) || 0}–${Number(emp.weeklyMax) || 0}h/wk)`
+      : emp.empType === 'casual' ? `casual (target ${Number(emp.weeklyHours) || 0}h/wk)`
+      : 'no employment type set';
+    const started = emp.startDate ? `, started ${new Date(emp.startDate).toLocaleDateString('en-GB')}` : '';
+    const certs = (emp.certs || []);
+    const certStr = certs.length ? certs.map(certLine).join('; ') : 'none on file';
+    const pin = emp.pin ? 'clock-in PIN set' : 'no clock-in PIN';
+    return `  • ${emp.name} — ${emp.role || 'Staff'}, ${type}${started}. ${pin}. Certificates: ${certStr}`;
+  };
+  const activeEmps = employees.filter(e => e.active !== false);
+  const inactiveEmps = employees.filter(e => e.active === false).map(e => e.name);
+  const certAll = employees.flatMap(e => (e.certs || []).map(c => ({ who: e.name, ...c })))
+    .filter(c => c.expiry).map(c => ({ ...c, days: Math.floor((new Date(c.expiry) - nowMs) / 86400000) }));
+  const certExpired = certAll.filter(c => c.days < 0);
+  const certSoon = certAll.filter(c => c.days >= 0 && c.days <= 60);
+  const profilesBlock = `
+EMPLOYEE PROFILES & CERTIFICATES (Team tab — profiles, employment type & weekly targets, right-to-work / training certificates with expiry):
+${activeEmps.length ? activeEmps.map(profileLine).join('\n') : '  • No active employees on file'}${inactiveEmps.length ? `\n  Inactive/archived: ${inactiveEmps.join(', ')}` : ''}
+  CERTIFICATE ALERTS: ${certExpired.length ? `${certExpired.length} EXPIRED (${certExpired.map(c => `${c.who}: ${c.name || c.fileName}`).join(', ')})` : 'none expired'}; ${certSoon.length ? `${certSoon.length} expiring within 60 days (${certSoon.map(c => `${c.who}: ${c.name || c.fileName} in ${c.days}d`).join(', ')})` : 'none expiring within 60 days'}.`;
+
   // ── KPI snapshot (computed across all sections, for clean reports) ──
   const cid = (c) => c.checklist_id || c.checklistId;
   const sid = (c) => c.section_id || c.sectionId;
@@ -439,6 +469,7 @@ ${fridgeBlock}
 ${probeBlock}
 
 ${employeeBlock}
+${profilesBlock}
 ${docBlock}
 
 RECENT AUDIT EVENTS:
