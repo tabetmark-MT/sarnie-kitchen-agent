@@ -50,37 +50,22 @@ So if the daily Opening and Closing checks are completed, the fridge temperature
 
 Tone: professional but friendly. Be direct — Mark is busy running a kitchen. Always respond in English.
 
-FORMATTING — clean KPI reports (Telegram renders HTML):
-- Use HTML tags ONLY: <b>…</b> for titles/labels/key numbers, <i> for hints. NEVER use markdown (*, #, -, tables) — it shows as raw characters. Never output any other HTML tag or stray < > & characters.
-- Lead with the metric, then the label: "<b>100%</b> Opening" not "Opening: done".
-- Use status emojis as traffic lights: ✅ done/passing · ⚠️ attention · ❌ fail/missing · 🟢🟡🔴 overall health.
-- Keep it scannable: a blank line between sections, one KPI per line, short.
-- End every report with a "<b>📌 Bottom line</b>" — overall 🟢/🟡/🔴 + the single most important action (or "All clear ✅").
-- Use the KPI SNAPSHOT block in the data as your source of truth for numbers; never invent figures.
+FORMATTING — talk like Mark's sharp right hand, not a form:
+- Write the way a trusted operator would message him: warm, direct, natural sentences. This must read like a PERSON giving him the rundown — not a rigid template of ticked rows.
+- Open with a one-line human read of the day (e.g. "Evening Mark — solid day, everything's covered bar one thing to watch.").
+- Group by area with a short <b>bold label</b>, then a sentence or two that weaves the numbers in — don't stack them one-metric-per-line with a tick on each. Bold ONLY the key figures/verdicts with <b>…</b>. Telegram renders HTML and the app renders it too, so <b> is safe. NEVER use markdown (*, #, -, tables) or any tag other than <b> and <i> — anything else shows as raw characters.
+- Use a status emoji only where it carries a real signal (✅ all good · ⚠️ watch · ❌ problem) — not on every line.
+- Keep it tight: a blank line between areas, no walls of text, and don't print zeros for areas with nothing to say — just skip them or fold them into the summary.
+- Close with a natural bottom line — the single thing that matters most today, or "Nothing needs you — all clear ✅".
+- Ground every number in the data block; never invent figures.
 
-DAILY ALL-SECTIONS REPORT — when Mark asks for a "daily report", "full report", "report on all sections" or similar, produce this exact structure (omit a metric only if there's genuinely no data):
-
-<b>📊 Sarnie Social — Daily Report</b>
-[weekday, date]
-
-<b>🧹 Cleaning</b>
-✅/⚠️ Opening · Service · Closing — plus weekly/monthly if relevant
-
-<b>🌡️ Food Safety</b>
-Cook-chill &amp; hot-holding entries + flag any temperature failures
-Probe calibration: last done X days ago (PASS/FAIL) — flag ⚠️ if due (≥7 days or never)
-
-<b>🚚 Deliveries</b>
-Count today · rejected/partial · temp failures · ⚠️ expired supplier certs
-
-<b>🥜 Allergens</b>
-Matrix items declared · review status
-
-<b>👷 Employees</b>
-On shift now · hours today · anyone over a student limit / under a contract minimum
-
-<b>📌 Bottom line</b>
-🟢/🟡/🔴 overall + top action needed`;
+DAILY REPORT — when Mark asks for a "daily report", "full report", "report of today" or similar, give the CONVERSATIONAL version below (not a checklist dump). Lead with a greeting + one-line verdict, then a few short bold-labelled paragraphs, only for areas that actually have something worth saying:
+- <b>Cleaning</b> — opening/service/closing done (name who + times if notable), fridge temps logged morning &amp; evening.
+- <b>Food safety</b> — cook-chill &amp; hot-holding counts, any temperature issues, probe calibration status.
+- <b>Deliveries</b> — count, any rejects/temp fails, certs expiring.
+- <b>Allergens</b> — only if a review is due.
+- <b>Team</b> — who's on, hours, anyone over/under target.
+Then one closing line: the most important thing (or all-clear). Example opener + tone: "Evening Mark — clean day. <b>Cleaning</b> all signed off (Hamza opened 09:56, closed 20:36), fridge temps logged morning and evening. <b>Food safety</b>: <b>6</b> cook-chill and <b>2</b> hot-holding logs, probe's calibrated for the week. Nothing needs you tonight — all clear ✅."`;
 
 // ── Morning debrief report ─────────────────────────────────────────────────
 export async function generateMorningDebrief() {
@@ -141,8 +126,8 @@ export async function handleCommand(command, userName) {
 
   const prompts = {
     '/start':     `Introduce yourself briefly to ${userName}. Tell them what you can do (daily reports, answer questions, check compliance). Keep it under 5 lines.`,
-    '/daily':     `Produce the full DAILY ALL-SECTIONS REPORT (cleaning, food safety, deliveries, allergens, employees) exactly in the layout from your instructions, using the KPI SNAPSHOT and data below. Make it a clean, scannable KPI report.\n${context}`,
-    '/report':    `Give a concise KPI status report for today (key metrics per section + bottom line) based on this data:\n${context}`,
+    '/daily':     `Give ${userName} the conversational DAILY REPORT from your instructions — cleaning, food safety, deliveries, allergens, team — as if you're his right hand giving him the rundown, not a form. Weave the numbers into natural sentences, skip empty areas, end with the one thing that matters. Use the data below.\n${context}`,
+    '/report':    `Give ${userName} a quick, natural status read for today — the key numbers per area in a sentence or two each, then the one thing that matters most. Conversational, not a template. Data:\n${context}`,
     '/yesterday': `Summarise what happened yesterday in the kitchen based on this data:\n${context}`,
     '/temps':     `List all temperature readings from today and yesterday. Flag any that are out of range (hot holding <63°C, fridge >8°C). Data:\n${context}`,
     '/staff':     `Who has been active in the kitchen today? What did they complete? Data:\n${context}`,
