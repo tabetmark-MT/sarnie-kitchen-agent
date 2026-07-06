@@ -108,6 +108,62 @@ export async function getSettings() {
   return Object.fromEntries(data.map(s => [s.key, s.value]));
 }
 
+// ── Write helpers: onboard team members (owner/admin-gated at the caller) ────
+// Allocate a 4-digit PIN not already in use in the given table.
+async function allocatePin(table) {
+  for (let i = 0; i < 60; i++) {
+    const pin = String(Math.floor(1000 + Math.random() * 9000));
+    const { data } = await supabase.from(table).select('id').eq('pin', pin).limit(1);
+    if (!data || data.length === 0) return pin;
+  }
+  throw new Error('Could not allocate a free PIN — set one manually in the app.');
+}
+
+const VALID_ROLES = ['admin', 'manager', 'head_chef', 'kitchen_lead', 'supervisor', 'chef', 'kitchen_porter', 'staff'];
+
+// Add a CLOCK IN/OUT employee: profile in app_settings.employees + clock PIN in
+// employee_pins. Returns { id, name, pin }.
+export async function addClockInEmployee({ name, role, empType, weeklyHours, weeklyMin, weeklyMax, startDate }) {
+  if (!name || !String(name).trim()) throw new Error('A name is required.');
+  const { data: cur } = await supabase.from('app_settings').select('value').eq('key', 'employees').maybeSingle();
+  const employees = Array.isArray(cur?.value) ? cur.value : [];
+  if (employees.some(e => (e.name || '').trim().toLowerCase() === String(name).trim().toLowerCase()))
+    throw new Error(`An employee named "${name}" already exists.`);
+  const id = (globalThis.crypto?.randomUUID?.() || `emp-${Date.now()}`);
+  const emp = {
+    id, name: String(name).trim(), role: role || 'Staff', active: true,
+    empType: empType || undefined,
+    weeklyHours: weeklyHours != null ? Number(weeklyHours) : undefined,
+    weeklyMin: weeklyMin != null ? Number(weeklyMin) : undefined,
+    weeklyMax: weeklyMax != null ? Number(weeklyMax) : undefined,
+    startDate: startDate || undefined,
+    certs: [],
+  };
+  employees.push(emp);
+  const up1 = await supabase.from('app_settings').upsert([{ key: 'employees', value: employees, updated_at: new Date().toISOString() }], { onConflict: 'key' });
+  if (up1.error) throw new Error(up1.error.message);
+  const pin = await allocatePin('employee_pins');
+  const up2 = await supabase.from('employee_pins').upsert([{ id, pin }]);
+  if (up2.error) throw new Error(up2.error.message);
+  return { id, name: emp.name, role: emp.role, pin };
+}
+
+// Add an APPLICATION login: row in app_users (login system auto-provisions auth
+// on first sign-in). Admin role is NOT allowed via the agent. Returns { id, name, role, pin }.
+export async function addAppUser({ name, role }) {
+  if (!name || !String(name).trim()) throw new Error('A name is required.');
+  const r = String(role || 'staff').toLowerCase().replace(/[\s-]+/g, '_');
+  if (r === 'admin') throw new Error('ADMIN_BLOCKED');
+  if (!VALID_ROLES.includes(r)) throw new Error(`Unknown permission level "${role}". Valid: manager, head_chef, kitchen_lead, supervisor, chef, kitchen_porter, staff.`);
+  const { data: existing } = await supabase.from('app_users').select('id').ilike('name', String(name).trim());
+  if (existing && existing.length) throw new Error(`A login for "${name}" already exists.`);
+  const id = (globalThis.crypto?.randomUUID?.() || `u-${Date.now()}`);
+  const pin = await allocatePin('app_users');
+  const up = await supabase.from('app_users').upsert([{ id, name: String(name).trim(), role: r, active: true, pin }]);
+  if (up.error) throw new Error(up.error.message);
+  return { id, name: String(name).trim(), role: r, pin };
+}
+
 // ── Build a rich context summary for Claude ───────────────────────────────
 export async function buildKitchenContext() {
   const [todayC, yesterdayC, recentC, users, audit, settings] = await Promise.all([

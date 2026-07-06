@@ -106,7 +106,7 @@ app.options('/chat', (req, res) => { chatCors(res); res.sendStatus(204); });
 app.post('/chat', async (req, res) => {
   chatCors(res);
   try {
-    const { message, token } = req.body || {};
+    const { message, token, history } = req.body || {};
     if (!message || !String(message).trim()) return res.status(400).json({ error: 'Empty message' });
 
     // Verify the caller has a valid Supabase session AND is an admin.
@@ -115,13 +115,18 @@ app.post('/chat', async (req, res) => {
     if (data.user.user_metadata?.role !== 'admin') return res.status(403).json({ error: 'The assistant is available to admins only.' });
 
     const name = data.user.user_metadata?.name || 'there';
-    const reply = await handleMessage(String(message).slice(0, 2000), name);
+    const hist = Array.isArray(history) ? history.slice(-12) : [];
+    const reply = await handleMessage(String(message).slice(0, 2000), name, hist);
     res.json({ reply });
   } catch (err) {
     console.error('[Chat] error:', err.message);
     res.status(500).json({ error: 'Something went wrong. Try again.' });
   }
 });
+
+// Short in-memory conversation memory per Telegram chat, so multi-turn flows
+// (like onboarding a team member) work. Resets on restart — that's fine.
+const chatHistory = new Map(); // chatId → [{ role, text }]
 
 // ── Telegram webhook ──────────────────────────────────────────────────────
 app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
@@ -152,8 +157,12 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
       } else {
         reply = await handleCommand(command, name);
       }
+      chatHistory.delete(chatId); // a slash command starts a fresh thread
     } else {
-      reply = await handleMessage(text, name);
+      const hist = chatHistory.get(chatId) || [];
+      reply = await handleMessage(text, name, hist);
+      const next = [...hist, { role: 'user', text }, { role: 'assistant', text: reply }].slice(-12);
+      chatHistory.set(chatId, next);
     }
     await sendMessage(chatId, reply);
   } catch (err) {

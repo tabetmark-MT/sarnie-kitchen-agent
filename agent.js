@@ -1,7 +1,63 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { buildKitchenContext } from './supabase.js';
+import { buildKitchenContext, addClockInEmployee, addAppUser } from './supabase.js';
 
 const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// ── Write tools: onboard team members. The agent must CONFIRM the details with
+// the user (in a message) before calling these; see the ONBOARDING section of
+// the system prompt. Gated upstream to the owner (Telegram) / admins (in-app).
+const TOOLS = [
+  {
+    name: 'add_clockin_employee',
+    description: 'Create a CLOCK IN/OUT employee (someone who clocks shifts). Adds them to the employees list and generates a unique 4-digit clock-in PIN. Only call AFTER the user has confirmed the details.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Full name' },
+        role: { type: 'string', description: 'Job title, e.g. Chef, Kitchen Porter (free text)' },
+        empType: { type: 'string', enum: ['student', 'contract', 'casual'], description: 'Employment type' },
+        weeklyHours: { type: 'number', description: 'For student = weekly cap (e.g. 20); for casual = weekly target' },
+        weeklyMin: { type: 'number', description: 'For contract = weekly minimum hours' },
+        weeklyMax: { type: 'number', description: 'For contract = weekly maximum hours' },
+        startDate: { type: 'string', description: 'Start date, YYYY-MM-DD (optional)' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'add_app_login',
+    description: 'Create an APPLICATION login (someone who signs into the app) with a permission level, and generate a unique 4-digit login PIN. Admin is NOT allowed here. Only call AFTER the user has confirmed the details.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Full name' },
+        role: {
+          type: 'string',
+          enum: ['manager', 'head_chef', 'kitchen_lead', 'supervisor', 'chef', 'kitchen_porter', 'staff'],
+          description: 'Permission level (admin is not permitted via chat)',
+        },
+      },
+      required: ['name', 'role'],
+    },
+  },
+];
+
+async function runTool(name, input) {
+  try {
+    if (name === 'add_clockin_employee') {
+      const r = await addClockInEmployee(input || {});
+      return { ok: true, type: 'clock-in employee', name: r.name, role: r.role, clockInPin: r.pin };
+    }
+    if (name === 'add_app_login') {
+      const r = await addAppUser(input || {});
+      return { ok: true, type: 'application login', name: r.name, permissionLevel: r.role, loginPin: r.pin };
+    }
+    return { ok: false, error: `Unknown tool ${name}` };
+  } catch (e) {
+    if (e.message === 'ADMIN_BLOCKED') return { ok: false, error: 'Admin logins can only be created in the app (Settings), not via chat. Offer to create them as a manager instead, or tell Mark to add the admin in the app.' };
+    return { ok: false, error: e.message };
+  }
+}
 
 const SYSTEM_PROMPT = `You are the Sarnie Social kitchen agent — Mark Tabet's right hand for running his UK food business. Talk to Mark like a sharp, trusted operations manager who happens to live inside his app: conversational, proactive and genuinely helpful. Answer ANY question about the business naturally — not just canned reports. If he chats, chat back; if he asks for data, give it; if he asks for advice, reason it through and recommend. You are the same kind of thinking partner he'd get from a great assistant.
 
@@ -39,8 +95,16 @@ HOW TO BE A TRUE AGENT:
 - Be conversational and human. Match Mark's energy — short answer for a short question, deeper dive when he wants one. It's fine to have normal conversation.
 - Be proactive: when you spot a real risk (missed closing, temp failure, expired cert, someone over a student visa limit, allergen review overdue) flag it and suggest the fix.
 - Give real operational advice when asked (rotas, cost, compliance, EHO prep) — reason it out, don't just restate data.
-- You are READ-ONLY: you can see and advise on everything, but you cannot change records, clock people in, or submit checklists. If Mark asks you to DO one of those, tell him it's done in the app and where, and offer to walk him through it.
+- You are read-only for records EXCEPT one thing: you can ONBOARD TEAM MEMBERS (see the ONBOARDING section). You still can't clock people in, edit shifts, submit checklists or edit data — for those, tell Mark it's done in the app and where.
 - Never claim a check is missing if the data shows it's covered (see the fridge-temp note below).
+
+ONBOARDING TEAM MEMBERS — you can add two kinds of people, using your tools. When Mark asks to "add a team member" (or add staff / new starter / new person), do NOT guess which kind — ask him first:
+"Sure — is this a clock in/out member (someone who just clocks shifts) or an application team member (someone who logs into the app with a permission level)? And what's their name?"
+- CLOCK IN/OUT member → use add_clockin_employee. Collect: name (required); optionally job title, employment type (student / contract / casual) and the weekly hours that go with it (student = weekly cap, e.g. 20h; contract = min–max; casual = target), and start date. Don't force the optional bits — name alone is enough if that's all he gives.
+- APPLICATION team member → use add_app_login. Collect: name and the PERMISSION LEVEL. Offer the levels plainly: manager, head chef, kitchen lead, supervisor, chef, kitchen porter, staff. ADMIN is NOT available via chat — if he asks for admin, say admins have to be created in the app (Settings) and offer to set them up as a manager instead.
+- ALWAYS confirm before creating: read the details back ("Add Sarah as a Manager application login — shall I create it?") and only call the tool after he says yes.
+- You generate the PIN. After creating, tell him the person's name, their type/level, and the 4-digit PIN clearly (e.g. "Done — Sarah is set up as a Manager. Her login PIN is 4821. She can sign in with it now.") so he can pass it on.
+- If a tool returns an error (duplicate name, admin blocked, etc.), explain it plainly and suggest the fix. Never invent a PIN or claim success unless the tool returned ok:true.
 
 Your core jobs: daily briefings & KPI reports, compliance/EHO watch, employee hours & targets, answering anything about the operation, and being a smart sounding board.
 
@@ -110,23 +174,45 @@ Have a great shift! 💪`,
   return msg.content[0].text;
 }
 
-// ── Handle a free-text or command message ──────────────────────────────────
-export async function handleMessage(userText, userName) {
+// ── Handle a free-text message, with conversation memory + write tools ──────
+// `history` is the prior turns [{ role:'user'|'assistant', text }] so multi-turn
+// flows (like onboarding a team member) work. Fresh kitchen data is injected on
+// the current turn only.
+export async function handleMessage(userText, userName, history = []) {
   const context = await buildKitchenContext();
 
-  const msg = await claude.messages.create({
-    model: 'claude-opus-4-5',
-    max_tokens: 1400,
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: 'user',
-        content: `Current kitchen data:\n${context}\n\n${userName} asks: ${userText}`,
-      },
-    ],
-  });
+  const messages = (history || [])
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.text)
+    .slice(-12)
+    .map(m => ({ role: m.role, content: String(m.text) }));
+  while (messages.length && messages[0].role !== 'user') messages.shift(); // API requires a user turn first
+  messages.push({ role: 'user', content: `Current kitchen data:\n${context}\n\n${userName} says: ${userText}` });
 
-  return msg.content[0].text;
+  // Tool-use loop: the model may ask for details, confirm, then call a tool.
+  for (let hop = 0; hop < 6; hop++) {
+    const resp = await claude.messages.create({
+      model: 'claude-opus-4-5',
+      max_tokens: 1400,
+      system: SYSTEM_PROMPT,
+      tools: TOOLS,
+      messages,
+    });
+    if (resp.stop_reason === 'tool_use') {
+      messages.push({ role: 'assistant', content: resp.content });
+      const results = [];
+      for (const block of resp.content) {
+        if (block.type === 'tool_use') {
+          const out = await runTool(block.name, block.input);
+          results.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(out) });
+        }
+      }
+      messages.push({ role: 'user', content: results });
+      continue; // let the model narrate the result
+    }
+    return resp.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
+      || 'Done.';
+  }
+  return 'That took more steps than expected — please try again.';
 }
 
 // ── Handle specific slash commands ────────────────────────────────────────
