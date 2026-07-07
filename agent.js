@@ -69,6 +69,9 @@ THE APP YOU LIVE IN (Sarnie Social — kitchen compliance app, dark kitchen at D
 - HACCP document library: policies & records by category (you can see the list in DOCUMENT LIBRARY). FS-006 is the Shelf Life Chart.
 - Employee Management (Today / Team / Timesheets tabs): PIN clock in/out, hours per employee, weekly targets (student weekly limit, contract min–max, casual target), profiles & certificates with expiry. AUTO CLOCK-OUT rule: if someone forgets to clock out, the system auto-closes their shift at 22:00 (London) and flags it as "forgot to clock out".
 - Reports: per-section CSV + PDF, a dedicated Fridge Temperature report (morning + evening per fridge, flags fails), and a full one-click EHO Records Pack PDF (cleaning, temperature control, fridge temps, deliveries, allergen reviews, probe calibration). Everything syncs across devices via Supabase and backs up nightly to Dropbox.
+- Dashboard "EHO ready" card: the command centre shows six traffic-light checks (cleaning today, fridges in range, probe two-point this week, allergen review, supplier certs, weekly deep clean) — if Mark asks "are we EHO ready", these are the six things to walk through. The dashboard's week KPIs compare WEEK-TO-DATE vs the same point last week (honest deltas), count only OPEN days (Sunday closed is excluded), and "Notes & corrective actions" is a neutral count, not bad news.
+- Cook-Chill page has a "Label helper": pick a product and it computes the use-by/discard date from the FS-006 shelf-life schedule (production day = Day 1). If Mark or staff ask "what use-by do I write on X", point them there (or answer from FS-006 yourself: e.g. Mayo Habanero RC-26 = 3 days, Habanero Molasses RC-08 = 5 days, Cookie Dough RC-10 = 24 hrs).
+- The fridges are numbered: #1 Single Door Upright, #2 Three Door Counter, #3 Three Door Salad, #4 Under Counter — use these names, they match the checklists, reports and your fridge analytics.
 - All dates/times across the app and your reports are Europe/London (BST/GMT aware), independent of any device's clock.
 
 WHAT YOU CAN SEE (in the data block each message): today's & yesterday's completions, a computed KPI snapshot, rolling compliance trends (last 7/30 days), the KPI DASHBOARD (this week vs last week — compliance %, records logged, flagged items, active days, and the 14-day compliance trend average; these are the exact figures on the app's home dashboard, so answer "how are we doing vs last week" type questions straight from here), FRIDGE TEMPERATURE ANALYTICS (per appliance over 30 days — pass rate, average, latest reading, fails, and a "trending warmer" drift flag — so you CAN answer "which fridge is failing/warming most"; these come from the daily Opening & Closing checks), employee hours & targets + recent clock log, the document library, suppliers/deliveries, and the audit trail. Use these as your source of truth — never invent numbers. If something genuinely isn't in the data (e.g. a date older than the history shown, or document contents), say so plainly and point Mark to the app's Reports/EHO export.
@@ -145,29 +148,21 @@ export async function generateMorningDebrief() {
   const context = await buildKitchenContext();
 
   const msg = await claude.messages.create({
-    model: 'claude-opus-4-5',
+    model: 'claude-opus-4-8',
     max_tokens: 1024,
     system: SYSTEM_PROMPT,
     messages: [{
       role: 'user',
-      content: `Generate the morning kitchen debrief report for today.
+      content: `It's the 9am morning debrief — message Mark to start his day, in your usual voice (a sharp right hand giving the rundown, NOT a form or template).
 
-Here is the current kitchen data:
-${context}
+Cover, woven into a few natural sentences with <b> on the key numbers only:
+- A one-line greeting + honest read of yesterday (what got done, anything missed).
+- Anything that needs him TODAY (overdue checks, probe point still owed this week, allergen review due, certs expiring, fridge trending warmer). If nothing, say so plainly.
+- Who's around / anything notable on staffing.
+Close with the single most important thing for today, or a simple "nothing needs you — all clear ✅". Keep it short: this is a good-morning message, not a report.
 
-Format it as:
-☀️ Good morning Mark — [day & date]
-
-📋 YESTERDAY
-[what was completed or missed]
-
-⚠️ ACTION NEEDED
-[anything overdue or concerning — if nothing, say "All clear ✅"]
-
-👥 STAFF
-[who's active]
-
-Have a great shift! 💪`,
+Current kitchen data:
+${context}`,
     }],
   });
 
@@ -191,7 +186,7 @@ export async function handleMessage(userText, userName, history = []) {
   // Tool-use loop: the model may ask for details, confirm, then call a tool.
   for (let hop = 0; hop < 6; hop++) {
     const resp = await claude.messages.create({
-      model: 'claude-opus-4-5',
+      model: 'claude-opus-4-8',
       max_tokens: 1400,
       system: SYSTEM_PROMPT,
       tools: TOOLS,
@@ -227,14 +222,13 @@ export async function handleCommand(command, userName) {
     '/temps':     `List all temperature readings from today and yesterday. Flag any that are out of range (hot holding <63°C, fridge >8°C). Data:\n${context}`,
     '/staff':     `Who has been active in the kitchen today? What did they complete? Data:\n${context}`,
     '/overdue':   `What checklists or tasks are overdue or missed? Be specific. Data:\n${context}`,
-    '/backup':    `Tell ${userName} that a manual backup has been triggered and will complete shortly.`,
-    '/help':      `List all available commands with a one-line description of each. Commands: /daily, /report, /yesterday, /temps, /staff, /overdue, /backup, /help. Also mention they can ask free-form questions (e.g. "send me a daily report on all sections").`,
+    '/help':      `List all available commands with a one-line description of each. Commands: /daily, /report, /yesterday, /temps, /staff, /overdue, /backup, /help. Also mention they can ask free-form questions (e.g. "send me a daily report on all sections") and can add team members by chat ("add a team member").`,
   };
 
   const prompt = prompts[command] || prompts['/report'];
 
   const msg = await claude.messages.create({
-    model: 'claude-opus-4-5',
+    model: 'claude-opus-4-8',
     max_tokens: command === '/daily' ? 1600 : 900,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: prompt }],

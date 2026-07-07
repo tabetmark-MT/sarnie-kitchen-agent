@@ -407,10 +407,10 @@ COMPLIANCE TRENDS (rolling, computed):
   // ── Fridge temperature analytics (per appliance, from daily Opening/Closing) ──
   // Matches the in-app dashboard "Fridge temperatures — 30 days" card.
   const FRIDGE_TASKS = {
-    'd-o-1': 'Undercounter fridge',        'd-c-11a': 'Undercounter fridge',
-    'd-o-2': 'Three-door counter fridge',  'd-c-11b': 'Three-door counter fridge',
-    'd-o-3': 'Single door upright fridge', 'd-c-11c': 'Single door upright fridge',
-    'd-o-4': 'Three-door saladette',       'd-c-11d': 'Three-door saladette',
+    'd-o-3': 'Fridge #1 Single Door Upright', 'd-c-11c': 'Fridge #1 Single Door Upright',
+    'd-o-2': 'Fridge #2 Three Door Counter',  'd-c-11b': 'Fridge #2 Three Door Counter',
+    'd-o-4': 'Fridge #3 Three Door Salad',    'd-c-11d': 'Fridge #3 Three Door Salad',
+    'd-o-1': 'Fridge #4 Under Counter',       'd-c-11a': 'Fridge #4 Under Counter',
   };
   const fridgeStat = (t) => (t <= 5 ? 'PASS' : t <= 8 ? 'WARN' : 'FAIL');
   const set30 = new Set(lastNkeys(30));

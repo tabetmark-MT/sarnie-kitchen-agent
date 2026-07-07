@@ -126,7 +126,15 @@ app.post('/chat', async (req, res) => {
 
 // Short in-memory conversation memory per Telegram chat, so multi-turn flows
 // (like onboarding a team member) work. Resets on restart — that's fine.
-const chatHistory = new Map(); // chatId → [{ role, text }]
+// Threads go stale after 2h idle: a half-finished conversation from days ago
+// must not bleed into a fresh one.
+const HISTORY_TTL_MS = 2 * 60 * 60 * 1000;
+const chatHistory = new Map(); // chatId → { at: ms, turns: [{ role, text }] }
+const getHistory = (chatId) => {
+  const h = chatHistory.get(chatId);
+  if (!h || Date.now() - h.at > HISTORY_TTL_MS) { chatHistory.delete(chatId); return []; }
+  return h.turns;
+};
 
 // ── Telegram webhook ──────────────────────────────────────────────────────
 app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
@@ -159,10 +167,10 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
       }
       chatHistory.delete(chatId); // a slash command starts a fresh thread
     } else {
-      const hist = chatHistory.get(chatId) || [];
+      const hist = getHistory(chatId);
       reply = await handleMessage(text, name, hist);
-      const next = [...hist, { role: 'user', text }, { role: 'assistant', text: reply }].slice(-12);
-      chatHistory.set(chatId, next);
+      const turns = [...hist, { role: 'user', text }, { role: 'assistant', text: reply }].slice(-12);
+      chatHistory.set(chatId, { at: Date.now(), turns });
     }
     await sendMessage(chatId, reply);
   } catch (err) {
