@@ -6,6 +6,7 @@ import { runNightlyBackup, formatBackupResult } from './backup.js';
 import { runAutoClockOut, formatAutoClockOut } from './autoClockout.js';
 import { supabase } from './supabase.js';
 import { authorisedIntel, buildComplianceSnapshot } from './intel.js';
+import { syncSupplierCatalog } from './catalogSync.js';
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -49,6 +50,12 @@ async function runAutoClockOutAndNotify() {
 async function triggerBackup(res) {
   try {
     await runAutoClockOutAndNotify(); // forgot-to-clock-out check rides the nightly trigger
+    // Daily supplier-catalogue sync rides the same guaranteed wake-up. Never
+    // blocks the backup — failures are logged and retried tomorrow.
+    try {
+      const sync = await syncSupplierCatalog();
+      console.log('[CatalogSync]', sync.ok ? `ok — ${sync.suppliersUpdated} updated, ${sync.suppliersAdded} added` : sync.reason);
+    } catch (e) { console.error('[CatalogSync] failed:', e.message); }
     const result = await runNightlyBackup();
     // Stay silent when another scheduler already backed up today (de-dup), and
     // when Dropbox simply isn't configured yet. Only notify on a real backup/error.
@@ -70,6 +77,13 @@ app.post(`/tasks/backup/${WEBHOOK_SECRET}`, (req, res) => triggerBackup(res));
 app.all(`/tasks/clockout/${WEBHOOK_SECRET}`, async (req, res) => {
   const result = await runAutoClockOutAndNotify();
   res.json(result);
+});
+
+// Supplier catalogue sync from SARNIE OS (source of truth for suppliers/items).
+// Manual trigger; also runs nightly on the morning cron below.
+app.all(`/tasks/catalog-sync/${WEBHOOK_SECRET}`, async (req, res) => {
+  try { res.json(await syncSupplierCatalog()); }
+  catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
 });
 
 // ── Compliance intelligence snapshot (read-only, for Cowork weekly report) ───
