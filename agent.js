@@ -3,6 +3,15 @@ import { buildKitchenContext, addClockInEmployee, addAppUser, getSetting } from 
 
 const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// Shared request shape: adaptive thinking (the model reasons before answering —
+// sharper multi-step advice) + the big stable system prompt cached (~90% cheaper
+// and faster on every follow-up and tool hop within 5 min). max_tokens includes
+// thinking, so budgets are set with headroom.
+const THINKING = { type: 'adaptive' };
+const SYSTEM = () => [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }];
+const textOf = (resp) =>
+  resp.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+
 // ── Write tools: onboard team members. The agent must CONFIRM the details with
 // the user (in a message) before calling these; see the ONBOARDING section of
 // the system prompt. Gated upstream to the owner (Telegram) / admins (in-app).
@@ -56,15 +65,18 @@ const TOOLS = [
 // Ask SARNIE OS's costing brain. Config via env (AGENT_CHAT_URL + AGENT_API_TOKEN)
 // with app_settings fallback (sarnie_agent_chat_url / sarnie_agent_api_token) so it
 // works before the Render env is set. Replies take ~15–30s.
-async function askCostingBrain(question) {
+async function askCostingBrain(question, convo = []) {
   const url = process.env.AGENT_CHAT_URL || (await getSetting('sarnie_agent_chat_url')) || 'https://sarnie-inventory-app.vercel.app/api/agent/chat';
   const token = process.env.AGENT_API_TOKEN || (await getSetting('sarnie_agent_api_token'));
   if (!token) return { ok: false, error: 'Costing brain not configured (set AGENT_API_TOKEN).' };
+  // Send the recent conversation plus the focused question, so follow-ups keep
+  // their thread on the SARNIE OS side (its API accepts message history).
+  const messages = [...convo, { role: 'user', content: String(question || '') }].slice(-12);
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, Accept: 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: String(question || '') }], site: 'SS-ISL' }),
+      body: JSON.stringify({ messages, site: 'SS-ISL' }),
       signal: AbortSignal.timeout(45000),
     });
     if (!res.ok) return { ok: false, error: `Costing brain returned HTTP ${res.status}` };
@@ -76,7 +88,7 @@ async function askCostingBrain(question) {
   }
 }
 
-async function runTool(name, input) {
+async function runTool(name, input, convo = []) {
   try {
     if (name === 'add_clockin_employee') {
       const r = await addClockInEmployee(input || {});
@@ -87,7 +99,7 @@ async function runTool(name, input) {
       return { ok: true, type: 'application login', name: r.name, permissionLevel: r.role, loginPin: r.pin };
     }
     if (name === 'ask_costing_brain') {
-      return await askCostingBrain(input?.question);
+      return await askCostingBrain(input?.question, convo);
     }
     return { ok: false, error: `Unknown tool ${name}` };
   } catch (e) {
@@ -109,6 +121,7 @@ THE APP YOU LIVE IN (Sarnie Social — kitchen compliance app, dark kitchen at D
 - Dashboard "EHO ready" card: the command centre shows six traffic-light checks (cleaning today, fridges in range, probe two-point this week, allergen review, supplier certs, weekly deep clean) — if Mark asks "are we EHO ready", these are the six things to walk through. The dashboard's week KPIs compare WEEK-TO-DATE vs the same point last week (honest deltas), count only OPEN days (Sunday closed is excluded), and "Notes & corrective actions" is a neutral count, not bad news.
 - Cook-Chill page has a "Label helper": pick a product and it computes the use-by/discard date from the FS-006 shelf-life schedule (production day = Day 1). If Mark or staff ask "what use-by do I write on X", point them there (or answer from FS-006 yourself: e.g. Mayo Habanero RC-26 = 3 days, Habanero Molasses RC-08 = 5 days, Cookie Dough RC-10 = 24 hrs).
 - The fridges are numbered: #1 Single Door Upright, #2 Three Door Counter, #3 Three Door Salad, #4 Under Counter — use these names, they match the checklists, reports and your fridge analytics.
+- SUPPLIERS & ITEMS COME LIVE FROM SARNIE OS: the delivery-logging screen's supplier and item pickers read the sister inventory system's live feed (SARNIE OS is the single source of truth for supplier/item master data; changes there appear in the kitchen app within ~10 minutes). So if Mark asks how to add or rename a supplier or item, the answer is: do it in SARNIE OS, it flows through automatically. The kitchen app's own Suppliers page remains the home of the EHO side — supplier CERTIFICATES (expiry-tracked), approval numbers and delivery-check history stay there.
 - All dates/times across the app and your reports are Europe/London (BST/GMT aware), independent of any device's clock.
 
 WHAT YOU CAN SEE (in the data block each message): today's & yesterday's completions, a computed KPI snapshot, rolling compliance trends (last 7/30 days), the KPI DASHBOARD (this week vs last week — compliance %, records logged, flagged items, active days, and the 14-day compliance trend average; these are the exact figures on the app's home dashboard, so answer "how are we doing vs last week" type questions straight from here), FRIDGE TEMPERATURE ANALYTICS (per appliance over 30 days — pass rate, average, latest reading, fails, and a "trending warmer" drift flag — so you CAN answer "which fridge is failing/warming most"; these come from the daily Opening & Closing checks), employee hours & targets + recent clock log, the document library, suppliers/deliveries, and the audit trail. Use these as your source of truth — never invent numbers. If something genuinely isn't in the data (e.g. a date older than the history shown, or document contents), say so plainly and point Mark to the app's Reports/EHO export.
@@ -188,8 +201,9 @@ export async function generateMorningDebrief() {
 
   const msg = await claude.messages.create({
     model: 'claude-opus-4-8',
-    max_tokens: 1024,
-    system: SYSTEM_PROMPT,
+    max_tokens: 4000,
+    thinking: THINKING,
+    system: SYSTEM(),
     messages: [{
       role: 'user',
       content: `It's the 9am morning debrief — message Mark to start his day, in your usual voice (a sharp right hand giving the rundown, NOT a form or template).
@@ -205,7 +219,7 @@ ${context}`,
     }],
   });
 
-  return msg.content[0].text;
+  return textOf(msg);
 }
 
 // ── Handle a free-text message, with conversation memory + write tools ──────
@@ -215,19 +229,25 @@ ${context}`,
 export async function handleMessage(userText, userName, history = []) {
   const context = await buildKitchenContext();
 
-  const messages = (history || [])
+  const cleanHistory = (history || [])
     .filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.text)
-    .slice(-12)
-    .map(m => ({ role: m.role, content: String(m.text) }));
+    .slice(-12);
+  const messages = cleanHistory.map(m => ({ role: m.role, content: String(m.text) }));
   while (messages.length && messages[0].role !== 'user') messages.shift(); // API requires a user turn first
   messages.push({ role: 'user', content: `Current kitchen data:\n${context}\n\n${userName} says: ${userText}` });
+
+  // Recent plain-text turns for the costing brain, so follow-ups ("and at
+  // £8.50?") reach SARNIE OS with their thread intact.
+  const convo = [...cleanHistory.map(m => ({ role: m.role, content: String(m.text) })),
+                 { role: 'user', content: String(userText) }].slice(-10);
 
   // Tool-use loop: the model may ask for details, confirm, then call a tool.
   for (let hop = 0; hop < 6; hop++) {
     const resp = await claude.messages.create({
       model: 'claude-opus-4-8',
-      max_tokens: 1400,
-      system: SYSTEM_PROMPT,
+      max_tokens: 6000,
+      thinking: THINKING,
+      system: SYSTEM(),
       tools: TOOLS,
       messages,
     });
@@ -236,15 +256,14 @@ export async function handleMessage(userText, userName, history = []) {
       const results = [];
       for (const block of resp.content) {
         if (block.type === 'tool_use') {
-          const out = await runTool(block.name, block.input);
+          const out = await runTool(block.name, block.input, convo);
           results.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(out) });
         }
       }
       messages.push({ role: 'user', content: results });
       continue; // let the model narrate the result
     }
-    return resp.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
-      || 'Done.';
+    return textOf(resp) || 'Done.';
   }
   return 'That took more steps than expected — please try again.';
 }
@@ -268,10 +287,11 @@ export async function handleCommand(command, userName) {
 
   const msg = await claude.messages.create({
     model: 'claude-opus-4-8',
-    max_tokens: command === '/daily' ? 1600 : 900,
-    system: SYSTEM_PROMPT,
+    max_tokens: command === '/daily' ? 5000 : 3500,
+    thinking: THINKING,
+    system: SYSTEM(),
     messages: [{ role: 'user', content: prompt }],
   });
 
-  return msg.content[0].text;
+  return textOf(msg);
 }
