@@ -27,7 +27,9 @@ const LDN = 'Europe/London';
 export function ldnMidnight(daysAgo = 0) {
   const now = new Date();
   const wallNow = new Date(now.toLocaleString('en-US', { timeZone: LDN }));
-  const off = now.getTime() - wallNow.getTime();
+  // Wall-clock parse drops sub-minute precision; real TZ offsets are multiples
+  // of 15 min — round so midnight comes out exact.
+  const off = Math.round((now.getTime() - wallNow.getTime()) / 900000) * 900000;
   const w = new Date(wallNow);
   w.setDate(w.getDate() - daysAgo);
   w.setHours(0, 0, 0, 0);
