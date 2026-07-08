@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { buildKitchenContext, addClockInEmployee, addAppUser } from './supabase.js';
+import { buildKitchenContext, addClockInEmployee, addAppUser, getSetting } from './supabase.js';
 
 const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -40,7 +40,41 @@ const TOOLS = [
       required: ['name', 'role'],
     },
   },
+  {
+    name: 'ask_costing_brain',
+    description: "Ask SARNIE OS (the sister inventory/costing system, the source of truth for supplier prices, ingredient costs, recipe/menu costings, gross-profit %, margins and supplier spend) a costing or pricing question. Use this WHENEVER Mark asks about the COST or PRICE of an ingredient/item/dish, recipe or menu costing, GP%/margin/food-cost %, what a supplier charges, or spend/purchasing — you do NOT have live prices yourself, SARNIE OS does. Pass a clear, self-contained question (include the item/dish name and any specifics). Do NOT use it for compliance, cleaning, temperatures, staff or rota questions — answer those yourself.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'A clear, self-contained costing/pricing question, e.g. "What does a portion of the Braised Beef Sarnie cost to make, and what GP% at £7.50?"' },
+      },
+      required: ['question'],
+    },
+  },
 ];
+
+// Ask SARNIE OS's costing brain. Config via env (AGENT_CHAT_URL + AGENT_API_TOKEN)
+// with app_settings fallback (sarnie_agent_chat_url / sarnie_agent_api_token) so it
+// works before the Render env is set. Replies take ~15–30s.
+async function askCostingBrain(question) {
+  const url = process.env.AGENT_CHAT_URL || (await getSetting('sarnie_agent_chat_url')) || 'https://sarnie-inventory-app.vercel.app/api/agent/chat';
+  const token = process.env.AGENT_API_TOKEN || (await getSetting('sarnie_agent_api_token'));
+  if (!token) return { ok: false, error: 'Costing brain not configured (set AGENT_API_TOKEN).' };
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: String(question || '') }], site: 'SS-ISL' }),
+      signal: AbortSignal.timeout(45000),
+    });
+    if (!res.ok) return { ok: false, error: `Costing brain returned HTTP ${res.status}` };
+    const data = await res.json();
+    const reply = data?.reply || data?.message || '';
+    return reply ? { ok: true, answer: reply } : { ok: false, error: 'Costing brain returned no answer.' };
+  } catch (e) {
+    return { ok: false, error: `Could not reach the costing brain: ${e.message}` };
+  }
+}
 
 async function runTool(name, input) {
   try {
@@ -51,6 +85,9 @@ async function runTool(name, input) {
     if (name === 'add_app_login') {
       const r = await addAppUser(input || {});
       return { ok: true, type: 'application login', name: r.name, permissionLevel: r.role, loginPin: r.pin };
+    }
+    if (name === 'ask_costing_brain') {
+      return await askCostingBrain(input?.question);
     }
     return { ok: false, error: `Unknown tool ${name}` };
   } catch (e) {
@@ -75,6 +112,8 @@ THE APP YOU LIVE IN (Sarnie Social — kitchen compliance app, dark kitchen at D
 - All dates/times across the app and your reports are Europe/London (BST/GMT aware), independent of any device's clock.
 
 WHAT YOU CAN SEE (in the data block each message): today's & yesterday's completions, a computed KPI snapshot, rolling compliance trends (last 7/30 days), the KPI DASHBOARD (this week vs last week — compliance %, records logged, flagged items, active days, and the 14-day compliance trend average; these are the exact figures on the app's home dashboard, so answer "how are we doing vs last week" type questions straight from here), FRIDGE TEMPERATURE ANALYTICS (per appliance over 30 days — pass rate, average, latest reading, fails, and a "trending warmer" drift flag — so you CAN answer "which fridge is failing/warming most"; these come from the daily Opening & Closing checks), employee hours & targets + recent clock log, the document library, suppliers/deliveries, and the audit trail. Use these as your source of truth — never invent numbers. If something genuinely isn't in the data (e.g. a date older than the history shown, or document contents), say so plainly and point Mark to the app's Reports/EHO export.
+
+COSTING & PRICING (via SARNIE OS): you do NOT hold ingredient prices, recipe costs, GP%/margins or supplier spend — the sister inventory system SARNIE OS does. Whenever Mark asks anything about what something COSTS or is PRICED at (an ingredient, a dish, a recipe/menu costing, food-cost %, gross profit, what a supplier charges, purchasing spend), call the ask_costing_brain tool with a clear self-contained question and relay its answer in your own voice — never guess a price. Keep using your own kitchen data for compliance, cleaning, temperatures, staff and rota. If the costing brain can't be reached, say the costing system is unavailable right now rather than inventing figures.
 
 YOU HAVE EMPLOYEE DATA — do not deny it. The data block includes CLOCKED IN TODAY, Currently on shift, Hours TODAY/THIS WEEK/THIS MONTH, WEEKLY HOURS vs TARGET, the RECENT CLOCK IN/OUT LOG, and EMPLOYEE PROFILES & CERTIFICATES. These come from the app's clock in/out system (PIN clock-ins) and the Team tab, NOT the audit trail. Never tell Mark you "don't have access to employee hours / shift / timesheet / profile data" or that you can only see logins from the audit trail — that is wrong, you have the real data. Only say data is missing if a specific section is genuinely empty.
 

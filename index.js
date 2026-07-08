@@ -1,6 +1,6 @@
 import express from 'express';
 import cron    from 'node-cron';
-import { sendMessage, setWebhook, parseUpdate } from './telegram.js';
+import { sendMessage, sendChatAction, setWebhook, parseUpdate } from './telegram.js';
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
 import { runNightlyBackup, formatBackupResult } from './backup.js';
 import { runAutoClockOut, formatAutoClockOut } from './autoClockout.js';
@@ -151,6 +151,12 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
     return;
   }
 
+  // Keep the "typing…" indicator alive — replies can take 15–30s when the brain
+  // consults the SARNIE OS costing system. Telegram's typing status lasts ~5s,
+  // so refresh it every 4s until we've sent the reply.
+  await sendChatAction(chatId, 'typing');
+  const typing = setInterval(() => sendChatAction(chatId, 'typing'), 4000);
+
   try {
     let reply;
     if (isCommand) {
@@ -172,8 +178,10 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
       const turns = [...hist, { role: 'user', text }, { role: 'assistant', text: reply }].slice(-12);
       chatHistory.set(chatId, { at: Date.now(), turns });
     }
+    clearInterval(typing);
     await sendMessage(chatId, reply);
   } catch (err) {
+    clearInterval(typing);
     console.error('[Agent] Error handling message:', err.message);
     await sendMessage(chatId, '⚠️ Something went wrong. Try again in a moment.');
   }
