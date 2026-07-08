@@ -19,43 +19,48 @@ export const supabase = createClient(
   { auth: { persistSession: false, autoRefreshToken: false } }
 );
 
+// ── Europe/London pinning ───────────────────────────────────────────────────
+// The server runs UTC; every boundary and formatted time the agent sees must be
+// LONDON, or clock-ins read an hour early during BST and "today" flips at 1am.
+const LDN = 'Europe/London';
+// London midnight `daysAgo` days back, as a real UTC instant.
+export function ldnMidnight(daysAgo = 0) {
+  const now = new Date();
+  const wallNow = new Date(now.toLocaleString('en-US', { timeZone: LDN }));
+  const off = now.getTime() - wallNow.getTime();
+  const w = new Date(wallNow);
+  w.setDate(w.getDate() - daysAgo);
+  w.setHours(0, 0, 0, 0);
+  return new Date(w.getTime() + off);
+}
+
 // ── Fetch today's completions ──────────────────────────────────────────────
 export async function getTodayCompletions() {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
   const { data } = await supabase
     .from('completions')
     .select('*')
-    .gte('date', start.toISOString())
+    .gte('date', ldnMidnight(0).toISOString())
     .order('date', { ascending: false });
   return data || [];
 }
 
 // ── Fetch yesterday's completions ──────────────────────────────────────────
 export async function getYesterdayCompletions() {
-  const start = new Date();
-  start.setDate(start.getDate() - 1);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setHours(23, 59, 59, 999);
   const { data } = await supabase
     .from('completions')
     .select('*')
-    .gte('date', start.toISOString())
-    .lte('date', end.toISOString())
+    .gte('date', ldnMidnight(1).toISOString())
+    .lt('date', ldnMidnight(0).toISOString())
     .order('date', { ascending: false });
   return data || [];
 }
 
 // ── Fetch completions for a date range ────────────────────────────────────
 export async function getCompletionsRange(daysBack = 7) {
-  const start = new Date();
-  start.setDate(start.getDate() - daysBack);
-  start.setHours(0, 0, 0, 0);
   const { data } = await supabase
     .from('completions')
     .select('*')
-    .gte('date', start.toISOString())
+    .gte('date', ldnMidnight(daysBack).toISOString())
     .order('date', { ascending: false });
   return data || [];
 }
@@ -164,15 +169,34 @@ export async function addAppUser({ name, role }) {
   return { id, name: String(name).trim(), role: r, pin };
 }
 
+// ── Live supplier/item catalogue from SARNIE OS (source of truth) ──────────
+// The delivery screens read this feed live; the agent must see the same thing,
+// not the stale local seed. Fail-soft: returns null if unreachable.
+async function getLiveCatalog() {
+  try {
+    const url = process.env.SUPPLIER_FEED_URL || (await getSetting('sarnie_suppliers_url')) || 'https://sarnie-inventory-app.vercel.app/api/suppliers';
+    const token = process.env.SUPPLIER_FEED_TOKEN || (await getSetting('sarnie_supplier_feed_token'));
+    if (!token) return null;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return Array.isArray(data?.suppliers) ? data.suppliers : null;
+  } catch { return null; }
+}
+
 // ── Build a rich context summary for Claude ───────────────────────────────
 export async function buildKitchenContext() {
-  const [todayC, yesterdayC, recentC, users, audit, settings] = await Promise.all([
+  const [todayC, yesterdayC, recentC, users, audit, settings, liveCatalog] = await Promise.all([
     getTodayCompletions(),
     getYesterdayCompletions(),
     getCompletionsRange(35),
     getUsers(),
     getRecentAudit(30),
     getSettings(),
+    getLiveCatalog(),
   ]);
 
   const CHECKLIST_NAMES = {
@@ -192,19 +216,19 @@ export async function buildKitchenContext() {
     const tasks = c.tasks || {};
     const done = Object.values(tasks).filter(Boolean).length;
     const total = Object.keys(tasks).length;
-    const time = new Date(c.date).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const time = new Date(c.date).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
     return `  • ${CHECKLIST_NAMES[id] || id} (${sec}) — ${done}/${total} tasks by ${by} at ${time}`;
   };
 
-  const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/London' });
 
   // ── Employee Management (clock in/out + hours) ──
   const employees = settings.employees || [];
   const timeEntries = settings.time_entries || [];
   const nowMs = Date.now();
-  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
-  const weekStart = new Date(); const wd = (weekStart.getDay() + 6) % 7;
-  weekStart.setDate(weekStart.getDate() - wd); weekStart.setHours(0, 0, 0, 0);
+  const startOfToday = ldnMidnight(0);
+  const wd = (new Date(new Date().toLocaleString('en-US', { timeZone: LDN })).getDay() + 6) % 7;
+  const weekStart = ldnMidnight(wd); // Monday 00:00 London
   const entryMins = (e, fromMs) => {
     const s = Math.max(new Date(e.clockIn).getTime(), fromMs);
     const en = e.clockOut ? new Date(e.clockOut).getTime() : nowMs;
@@ -213,7 +237,7 @@ export async function buildKitchenContext() {
   const fmtH = (m) => { const h = Math.floor(m / 60), mm = Math.round(m % 60); return h ? `${h}h ${mm}m` : `${mm}m`; };
   const nameFor = (id, fallback) => employees.find(e => e.id === id)?.name || fallback || 'Employee';
   const onShift = timeEntries.filter(e => !e.clockOut).map(e => {
-    const t = new Date(e.clockIn).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const t = new Date(e.clockIn).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
     return `${nameFor(e.employeeId, e.employeeName)} (since ${t}, ${fmtH(entryMins(e, 0))})`;
   });
   const hoursLine = (fromMs) => employees
@@ -225,7 +249,7 @@ export async function buildKitchenContext() {
       return mins > 0 ? `  • ${emp.name}: ${fmtH(mins)}` : null;
     })
     .filter(Boolean);
-  const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
+  const monthStart = ldnMidnight(Number(new Date().toLocaleDateString('en-CA', { timeZone: LDN }).slice(8, 10)) - 1); // 1st 00:00 London
   const todayHours = hoursLine(startOfToday.getTime());
   const weekHours = hoursLine(weekStart.getTime());
   const monthHours = hoursLine(monthStart.getTime());
@@ -265,9 +289,9 @@ export async function buildKitchenContext() {
     .slice(0, 40)
     .map(e => {
       const inT = new Date(e.clockIn);
-      const dayStr = inT.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
-      const inStr = inT.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-      const outStr = e.clockOut ? new Date(e.clockOut).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'still on shift';
+      const dayStr = inT.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/London' });
+      const inStr = inT.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
+      const outStr = e.clockOut ? new Date(e.clockOut).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' }) : 'still on shift';
       const dur = fmtH(entryMins(e, 0));
       return `  • ${nameFor(e.employeeId, e.employeeName)} — ${dayStr}: ${inStr} → ${outStr} (${dur})${e.editedBy ? ' [edited]' : ''}`;
     });
@@ -277,8 +301,8 @@ export async function buildKitchenContext() {
     .filter(e => new Date(e.clockIn).getTime() >= startOfToday.getTime())
     .sort((a, b) => new Date(a.clockIn) - new Date(b.clockIn))
     .map(e => {
-      const inS = new Date(e.clockIn).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-      const outS = e.clockOut ? new Date(e.clockOut).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'on shift now';
+      const inS = new Date(e.clockIn).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
+      const outS = e.clockOut ? new Date(e.clockOut).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' }) : 'on shift now';
       return `  • ${nameFor(e.employeeId, e.employeeName)}: ${inS} → ${outS} (${fmtH(entryMins(e, 0))})`;
     });
 
@@ -303,7 +327,7 @@ ${recentShifts.length ? recentShifts.join('\n') : '  • No shifts recorded'}`;
     const nm = c.name || c.fileName || 'certificate';
     if (!c.expiry) return `${nm} (no expiry set)`;
     const days = Math.floor((new Date(c.expiry) - nowMs) / 86400000);
-    const state = days < 0 ? `EXPIRED ${-days}d ago` : days <= 60 ? `expires in ${days}d ⚠️` : `valid to ${new Date(c.expiry).toLocaleDateString('en-GB')}`;
+    const state = days < 0 ? `EXPIRED ${-days}d ago` : days <= 60 ? `expires in ${days}d ⚠️` : `valid to ${new Date(c.expiry).toLocaleDateString('en-GB', { timeZone: 'Europe/London' })}`;
     return `${nm} — ${state}`;
   };
   const profileLine = (emp) => {
@@ -311,7 +335,7 @@ ${recentShifts.length ? recentShifts.join('\n') : '  • No shifts recorded'}`;
       : emp.empType === 'contract' ? `contract (${Number(emp.weeklyMin) || 0}–${Number(emp.weeklyMax) || 0}h/wk)`
       : emp.empType === 'casual' ? `casual (target ${Number(emp.weeklyHours) || 0}h/wk)`
       : 'no employment type set';
-    const started = emp.startDate ? `, started ${new Date(emp.startDate).toLocaleDateString('en-GB')}` : '';
+    const started = emp.startDate ? `, started ${new Date(emp.startDate).toLocaleDateString('en-GB', { timeZone: 'Europe/London' })}` : '';
     const certs = (emp.certs || []);
     const certStr = certs.length ? certs.map(certLine).join('; ') : 'none on file';
     const pin = emp.pin ? 'clock-in PIN set' : 'no clock-in PIN';
@@ -351,6 +375,44 @@ ${activeEmps.length ? activeEmps.map(profileLine).join('\n') : '  • No active 
   }).length), 0);
   const suppliers = settings.suppliers || [];
   const expiredCerts = suppliers.reduce((n, s) => n + ((s.certificates || []).filter(c => c.expiryDate && new Date(c.expiryDate) < new Date()).length), 0);
+
+  // ── Suppliers & items (live from SARNIE OS) + kitchen-held certificates ──
+  const catalogLines = liveCatalog
+    ? liveCatalog.map(s => {
+        const items = s.items || [];
+        const cats = [...new Set(items.map(i => i.category).filter(Boolean))].slice(0, 4).join(', ');
+        return `  • ${s.name} — ${items.length} item${items.length !== 1 ? 's' : ''}${cats ? ` (${cats})` : ''}${s.leadTimeDays != null ? `, lead time ${s.leadTimeDays}d` : ''}${s.deliveryDays?.length ? `, delivers ${[].concat(s.deliveryDays).join('/')}` : ''}`;
+      }).join('\n')
+    : '  • Live item feed unreachable right now — say so if asked for item-level detail rather than guessing.';
+  const certLines = suppliers.flatMap(s => (s.certificates || []).map(c => {
+    if (!c.expiryDate) return `  • ${s.name} — ${c.name || 'certificate'}: no expiry set`;
+    const days = Math.floor((new Date(c.expiryDate) - Date.now()) / 86400000);
+    const state = days < 0 ? `EXPIRED ${-days}d ago ❌` : days <= 60 ? `expires in ${days}d ⚠️ (${c.expiryDate})` : `valid to ${c.expiryDate}`;
+    return `  • ${s.name} — ${c.name || 'certificate'}: ${state}`;
+  }));
+  const supplierBlock = `
+SUPPLIERS & ITEM CATALOGUE (live from SARNIE OS — the source of truth; changes made there reach the delivery screen in ~10 min):
+${catalogLines}
+  SUPPLIER CERTIFICATES (kitchen-held, EHO — flag anything expired or ≤60 days):
+${certLines.length ? certLines.join('\n') : '  • No supplier certificates on file'}`;
+
+  // ── Recent deliveries (last 7 days) ──
+  const weekDeliv = deliveries
+    .filter(d => new Date(d.date) >= ldnMidnight(7))
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .slice(0, 15);
+  const delivLines = weekDeliv.map(d => {
+    const day = new Date(d.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: LDN });
+    const fails = (d.items || []).filter(i => {
+      const t = parseFloat(i.temp);
+      if (i.type === 'ambient' || isNaN(t)) return false;
+      return (i.type === 'chilled' && t > 8) || (i.type === 'frozen' && t > -18) || (i.type === 'hot' && t < 63);
+    }).length;
+    return `  • ${day} — ${d.supplierName || 'Unknown supplier'}: ${d.outcome || 'accepted'}, ${(d.items || []).length} item${(d.items || []).length !== 1 ? 's' : ''}${fails ? `, ${fails} TEMP FAIL${fails !== 1 ? 'S' : ''} ❌` : ''}${d.signedByName ? `, signed ${d.signedByName}` : ''}`;
+  });
+  const deliveryBlock = `
+DELIVERIES — LAST 7 DAYS (${weekDeliv.length}):
+${delivLines.length ? delivLines.join('\n') : '  • None logged this week'}`;
   const menu = settings.allergen_menu?.menus?.[0];
   const menuItems = menu?.items?.length || 0;
 
@@ -379,7 +441,7 @@ KPI SNAPSHOT (today — computed, use these for clean reports):
   👷 EMPLOYEES — On shift now: ${onShift.length}; staff with hours today: ${todayHours.length}`;
 
   // ── Compliance trends (from last ~35 days of completions) ──
-  const dayKey = (d) => new Date(d).toLocaleDateString('en-CA');
+  const dayKey = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
   const dailyByDay = {};
   recentC.filter(c => cid(c) === 'daily').forEach(c => { (dailyByDay[dayKey(c.date)] ||= new Set()).add(sid(c)); });
   const dayComplete = (set) => set.has('full') || (set.has('opening') && set.has('during') && set.has('closing'));
@@ -390,7 +452,7 @@ KPI SNAPSHOT (today — computed, use these for clean reports):
   const monthlyDone = recentC.some(c => cid(c) === 'monthly' && new Date(c.date) >= monthStart);
   const allergenRev = recentC.filter(c => cid(c) === 'allergen_monthly').sort((a, b) => new Date(b.date) - new Date(a.date))[0];
   const allergenTxt = allergenRev
-    ? `last on ${new Date(allergenRev.date).toLocaleDateString('en-GB')} (${Math.floor((Date.now() - new Date(allergenRev.date)) / 86400000)} days ago)`
+    ? `last on ${new Date(allergenRev.date).toLocaleDateString('en-GB', { timeZone: 'Europe/London' })} (${Math.floor((Date.now() - new Date(allergenRev.date)) / 86400000)} days ago)`
     : 'no review in the last 35 days';
   const set7 = new Set(lastNkeys(7));
   const cook7 = recentC.filter(c => cid(c) === 'cookchill' && set7.has(dayKey(c.date))).length;
@@ -490,9 +552,9 @@ KPI DASHBOARD (this week vs last — the same figures the manager sees on the ap
 PROBE CALIBRATION (DK-016 — TWO-POINT, weekly: ice water 0°C AND boiling water 100°C, ±1°C; both points are required each week):
   This week: ice point ${hasIce ? 'done ✓' : 'NOT done'}, boiling point ${hasBoil ? 'done ✓' : 'NOT done'}. STATUS: ${bothPoints ? 'up to date (both points this week).' : `DUE NOW — ${pendingPoint || 'no calibration'} still needed this week.`}
   ${lastCal
-    ? `Most recent: ${new Date(lastCal.createdAt || lastCal.date).toLocaleDateString('en-GB')} (${calDays} day${calDays !== 1 ? 's' : ''} ago) — ${methodName(lastCal.method)} read ${lastCal.reading}°C, ${lastCal.pass ? 'PASS' : 'FAIL'}.`
+    ? `Most recent: ${new Date(lastCal.createdAt || lastCal.date).toLocaleDateString('en-GB', { timeZone: 'Europe/London' })} (${calDays} day${calDays !== 1 ? 's' : ''} ago) — ${methodName(lastCal.method)} read ${lastCal.reading}°C, ${lastCal.pass ? 'PASS' : 'FAIL'}.`
     : 'No calibration on record.'}
-  ${lastWipe ? `Probe wipes: ${lastWipe.inStock ? 'in stock' : 'OUT of stock' + (lastWipe.reordered ? ' (re-ordered)' : ' (NOT re-ordered)')} as of ${new Date(lastWipe.date).toLocaleDateString('en-GB')}.` : 'Probe wipe stock: not checked recently.'}`;
+  ${lastWipe ? `Probe wipes: ${lastWipe.inStock ? 'in stock' : 'OUT of stock' + (lastWipe.reordered ? ' (re-ordered)' : ' (NOT re-ordered)')} as of ${new Date(lastWipe.date).toLocaleDateString('en-GB', { timeZone: 'Europe/London' })}.` : 'Probe wipe stock: not checked recently.'}`;
 
   // ── HACCP / compliance document library ──
   const docs = settings.documents || [];
@@ -502,8 +564,9 @@ PROBE CALIBRATION (DK-016 — TWO-POINT, weekly: ice water 0°C AND boiling wate
 DOCUMENT LIBRARY (HACCP & compliance documents on file — ${docs.length} total):
 ${docs.length ? Object.entries(byCat).map(([cat, titles]) => `  • ${cat} (${titles.length}): ${titles.slice(0, 8).join('; ')}${titles.length > 8 ? '; …' : ''}`).join('\n') : '  • No documents on file'}`;
 
+  const nowLdn = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: LDN });
   return `
-TODAY: ${today}
+TODAY: ${today} — right now it is ${nowLdn} (Europe/London; every time below is London time)
 ${kpiBlock}
 
 ACTIVE STAFF: ${users.map(u => `${u.name} (${u.role})`).join(', ')}
@@ -523,12 +586,14 @@ ${complianceBlock}
 ${kpiDashBlock}
 ${fridgeBlock}
 ${probeBlock}
+${supplierBlock}
+${deliveryBlock}
 
 ${employeeBlock}
 ${profilesBlock}
 ${docBlock}
 
 RECENT AUDIT EVENTS:
-${audit.slice(0, 10).map(a => `  • ${new Date(a.timestamp).toLocaleString('en-GB')} — ${a.action}: ${a.detail || ''}`).join('\n')}
+${audit.slice(0, 10).map(a => `  • ${new Date(a.timestamp).toLocaleString('en-GB', { timeZone: 'Europe/London' })} — ${a.action}: ${a.detail || ''}`).join('\n')}
 `.trim();
 }

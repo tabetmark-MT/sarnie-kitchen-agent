@@ -4,7 +4,7 @@ import { sendMessage, sendChatAction, setWebhook, parseUpdate } from './telegram
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
 import { runNightlyBackup, formatBackupResult } from './backup.js';
 import { runAutoClockOut, formatAutoClockOut } from './autoClockout.js';
-import { supabase } from './supabase.js';
+import { supabase, getSetting, upsertSetting } from './supabase.js';
 import { authorisedIntel, buildComplianceSnapshot } from './intel.js';
 
 const app  = express();
@@ -187,18 +187,31 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
   }
 });
 
-// ── Morning debrief cron ──────────────────────────────────────────────────
-// Fires every day at MORNING_HOUR:MORNING_MINUTE (server time = UTC)
-// Render servers run UTC, so adjust accordingly
+// ── Morning debrief ─────────────────────────────────────────────────────────
+// Sent once per London day, at/after 9am. The in-process cron only fires when
+// the free Render instance happens to be awake, so a GitHub Actions ping also
+// hits /tasks/debrief every morning (the request itself wakes the service) —
+// the once-a-day guard makes the two triggers safe together.
+async function runMorningDebrief() {
+  const todayLdn = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+  const hourLdn = Number(new Date().toLocaleString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', hour12: false }));
+  if (hourLdn < Number(MORNING_HOUR)) return { skipped: true, reason: `before ${MORNING_HOUR}:00 London` };
+  if ((await getSetting('last_debrief_date')) === todayLdn) return { skipped: true, reason: 'already sent today' };
+  const report = await generateMorningDebrief();
+  await sendMessage(OWNER_CHAT_ID, report);
+  await upsertSetting('last_debrief_date', todayLdn);
+  console.log('[Debrief] sent ✅');
+  return { ok: true };
+}
+
+app.all(`/tasks/debrief/${WEBHOOK_SECRET}`, async (req, res) => {
+  try { res.json(await runMorningDebrief()); }
+  catch (e) { console.error('[Debrief] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
+});
+
 cron.schedule(`${MORNING_MINUTE} ${MORNING_HOUR} * * *`, async () => {
-  console.log('[Cron] Sending morning debrief...');
-  try {
-    const report = await generateMorningDebrief();
-    await sendMessage(OWNER_CHAT_ID, report);
-    console.log('[Cron] Morning debrief sent ✅');
-  } catch (err) {
-    console.error('[Cron] Failed to send morning debrief:', err.message);
-  }
+  try { await runMorningDebrief(); }
+  catch (err) { console.error('[Cron] Morning debrief failed:', err.message); }
 }, { timezone: 'Europe/London' });
 
 // ── Nightly off-site backup cron (Europe/London) ────────────────────────────

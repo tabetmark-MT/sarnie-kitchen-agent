@@ -1,0 +1,26 @@
+name: Morning Debrief
+
+# Guarantees Mark's 9am debrief even when the free Render instance is asleep —
+# the request itself wakes it. GitHub cron is UTC and can't follow DST, so we
+# fire at both 08:05 and 09:05 UTC; the endpoint only sends at/after 9am London
+# and only once per day, so exactly one message goes out year-round.
+# Reuses the BACKUP_URL secret (same WEBHOOK_SECRET path) — no new secret needed.
+on:
+  schedule:
+    - cron: '5 8,9 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  debrief:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger morning debrief
+        env:
+          BACKUP_URL: ${{ secrets.BACKUP_URL }}
+        run: |
+          url="${BACKUP_URL//\/tasks\/backup\///tasks/debrief/}"
+          echo "Calling debrief endpoint (cold start can take ~60s)…"
+          body=$(curl -s --max-time 180 "$url")
+          echo "Response: $body"
+          echo "$body" | grep -qE '"ok":true|"skipped":true' || { echo "::error::Debrief did not report success"; exit 1; }
+          echo "✅ Debrief endpoint responded"
