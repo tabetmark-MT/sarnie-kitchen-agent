@@ -4,7 +4,7 @@ import { sendMessage, sendChatAction, setWebhook, parseUpdate } from './telegram
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
 import { runNightlyBackup, formatBackupResult } from './backup.js';
 import { runAutoClockOut, formatAutoClockOut } from './autoClockout.js';
-import { supabase, getSetting, upsertSetting } from './supabase.js';
+import { supabase, getSetting, upsertSetting, getComplianceSnapshot } from './supabase.js';
 import { authorisedIntel, buildComplianceSnapshot } from './intel.js';
 
 const app  = express();
@@ -71,6 +71,50 @@ app.all(`/tasks/clockout/${WEBHOOK_SECRET}`, async (req, res) => {
   const result = await runAutoClockOutAndNotify();
   res.json(result);
 });
+
+// ── Proactive risk watch ─────────────────────────────────────────────────────
+// Polls the live compliance feed and pings the owner the MOMENT a new flag
+// appears (fridge excursion, missing/overdue log, probe gap, allergen review
+// due, expiring cert) — instead of waiting for the 9am debrief or a question.
+// Only NEW flags alert (de-duped against the last set); an all-clear is sent
+// when the last flag resolves. Seeds silently on first run. Open hours only.
+async function runRiskCheck() {
+  const hourLdn = Number(new Date().toLocaleString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', hour12: false }));
+  if (hourLdn < 7 || hourLdn >= 22) return { skipped: 'outside 07:00–22:00 London' };
+
+  const snap = await getComplianceSnapshot();
+  if (!snap) return { skipped: 'compliance feed unavailable' };
+  const flags = Array.isArray(snap.flags) ? snap.flags : [];
+
+  const prevRaw = await getSetting('last_risk_flags');
+  if (prevRaw === undefined || prevRaw === null) { // first run — seed, don't alert
+    await upsertSetting('last_risk_flags', flags);
+    return { seeded: true, flags: flags.length };
+  }
+  const prev = Array.isArray(prevRaw) ? prevRaw : [];
+  const newFlags = flags.filter(f => !prev.includes(f));
+  const cleared = prev.length > 0 && flags.length === 0;
+
+  if (newFlags.length) {
+    const msg = `⚠️ <b>Heads up Mark</b> — new compliance flag${newFlags.length > 1 ? 's' : ''} just now:\n`
+      + newFlags.map(f => `• ${f}`).join('\n')
+      + `\n\n<b>Overall:</b> ${snap.summary}`;
+    await sendMessage(OWNER_CHAT_ID, msg);
+  } else if (cleared) {
+    await sendMessage(OWNER_CHAT_ID, '✅ All compliance flags cleared — you\'re green again.');
+  }
+  await upsertSetting('last_risk_flags', flags);
+  return { ok: true, newFlags, total: flags.length };
+}
+
+app.all(`/tasks/risk-check/${WEBHOOK_SECRET}`, async (req, res) => {
+  try { res.json(await runRiskCheck()); }
+  catch (e) { console.error('[RiskCheck] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Backup in-process poll every 30 min (fires when awake; the GitHub Actions ping
+// guarantees it runs even when the free Render instance is asleep).
+cron.schedule('*/30 * * * *', () => { runRiskCheck().catch(e => console.error('[RiskCheck cron]', e.message)); }, { timezone: 'Europe/London' });
 
 // ── Compliance intelligence snapshot (read-only, for Cowork weekly report) ───
 // Token-secured (INTEL_API_TOKEN) via Bearer header or ?token=. Optional

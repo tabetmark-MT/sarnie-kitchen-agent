@@ -1,0 +1,26 @@
+name: Risk Watch
+
+# Polls the compliance feed every 30 min during open hours and alerts Telegram on
+# any NEW risk flag. Runs on GitHub's infra so it fires even when the free Render
+# instance is asleep (the request wakes it). The endpoint itself gates open hours
+# (07:00–22:00 London) and de-dups, so extra pings are harmless.
+# Reuses the BACKUP_URL secret (same WEBHOOK_SECRET path) — no new secret needed.
+on:
+  schedule:
+    - cron: '*/30 6-21 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  risk-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Poll risk watch
+        env:
+          BACKUP_URL: ${{ secrets.BACKUP_URL }}
+        run: |
+          url="${BACKUP_URL//\/tasks\/backup\///tasks/risk-check/}"
+          echo "Calling risk-check endpoint (cold start can take ~60s)…"
+          body=$(curl -s --max-time 180 "$url")
+          echo "Response: $body"
+          echo "$body" | grep -qE '"ok":true|"skipped":|"seeded":true' || { echo "::error::Risk check did not respond as expected"; exit 1; }
+          echo "✅ Risk watch ran"
