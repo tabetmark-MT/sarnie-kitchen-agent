@@ -273,6 +273,29 @@ export async function buildKitchenContext() {
   const monthStart = ldnMidnight(Number(new Date().toLocaleDateString('en-CA', { timeZone: LDN }).slice(8, 10)) - 1); // 1st 00:00 London
   const todayHours = hoursLine(startOfToday.getTime());
   const weekHours = hoursLine(weekStart.getTime());
+
+  // ── Labour cost (pay rate × clocked hours) — the agent is admin-gated, so it
+  // may surface pay/cost to Mark. Empty if no rates are set yet. ──
+  const empRate = (emp) => Number(emp?.hourlyRate) || 0;
+  const minsSince = (emp, fromMs) => timeEntries
+    .filter(e => e.employeeId === emp.id && (e.clockOut ? new Date(e.clockOut).getTime() : nowMs) >= fromMs)
+    .reduce((s, e) => s + entryMins(e, fromMs), 0);
+  const payEmps = employees.filter(e => e.active !== false);
+  const anyRates = payEmps.some(e => empRate(e) > 0);
+  let weekCost = 0, monthCost = 0;
+  const labourLines = payEmps.map(emp => {
+    const wm = minsSince(emp, weekStart.getTime());
+    const c = (wm / 60) * empRate(emp);
+    weekCost += c;
+    monthCost += (minsSince(emp, monthStart.getTime()) / 60) * empRate(emp);
+    return (wm > 0 && empRate(emp) > 0) ? `  • ${emp.name}: ${fmtH(wm)} × £${empRate(emp).toFixed(2)}/h = £${Math.round(c)}` : null;
+  }).filter(Boolean);
+  const domNow = new Date().getDate();
+  const dim = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
+  const projMonthCost = domNow ? Math.round((monthCost / domNow) * dim) : 0;
+  const labourBlock = anyRates
+    ? `\nEMPLOYEE LABOUR COST (pay rate × clocked hours — admin data; answer Mark's cost questions from here):\n  This week so far: £${Math.round(weekCost)} · Month to date: £${Math.round(monthCost)} · Projected month: £${projMonthCost}\n${labourLines.join('\n')}`
+    : `\nEMPLOYEE LABOUR COST: no pay rates set yet — if Mark asks, tell him to add £/hr on each Employee Profile (Employee Management → Employee Profile, management only) to unlock labour costing.`;
   const monthHours = hoursLine(monthStart.getTime());
 
   // Weekly hours vs each employee's contracted/student target (+ remaining)
@@ -627,6 +650,7 @@ ${supplierBlock}
 ${deliveryBlock}
 
 ${employeeBlock}
+${labourBlock}
 ${profilesBlock}
 ${docBlock}
 
