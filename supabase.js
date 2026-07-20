@@ -189,9 +189,27 @@ async function getLiveCatalog() {
   } catch { return null; }
 }
 
+// ── Live EHO / compliance snapshot — the SAME /api/compliance feed the app
+// exposes, so the agent's "EHO ready" rundown is identical to it (one source of
+// truth). Fail-soft: returns null if unreachable. ──
+export async function getComplianceSnapshot() {
+  try {
+    const url = process.env.KITCHEN_COMPLIANCE_URL || (await getSetting('kitchen_compliance_url')) || 'https://sarnie-kitchen-app.vercel.app/api/compliance';
+    const token = process.env.KITCHEN_COMPLIANCE_TOKEN || (await getSetting('kitchen_compliance_token'));
+    if (!token) return null;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return (data && Array.isArray(data.areas)) ? data : null;
+  } catch { return null; }
+}
+
 // ── Build a rich context summary for Claude ───────────────────────────────
 export async function buildKitchenContext() {
-  const [todayC, yesterdayC, recentC, users, audit, settings, liveCatalog] = await Promise.all([
+  const [todayC, yesterdayC, recentC, users, audit, settings, liveCatalog, compliance] = await Promise.all([
     getTodayCompletions(),
     getYesterdayCompletions(),
     getCompletionsRange(35),
@@ -199,6 +217,7 @@ export async function buildKitchenContext() {
     getRecentAudit(30),
     getSettings(),
     getLiveCatalog(),
+    getComplianceSnapshot(),
   ]);
 
   const CHECKLIST_NAMES = {
@@ -415,6 +434,21 @@ ${certLines.length ? certLines.join('\n') : '  • No supplier certificates on f
   const deliveryBlock = `
 DELIVERIES — LAST 7 DAYS (${weekDeliv.length}):
 ${delivLines.length ? delivLines.join('\n') : '  • None logged this week'}`;
+
+  // ── EHO READINESS — verbatim from the /api/compliance feed (single source of
+  // truth). Use these exact colours/flags for any "EHO ready" or /eho rundown so
+  // it matches the feed word-for-word. ──
+  const dot = { green: '🟢', amber: '🟡', red: '🔴' };
+  const ehoBlock = compliance
+    ? `
+EHO READINESS (live compliance feed — use these EXACT statuses & flags for any "are we EHO ready" / RAG rundown):
+  Overall: ${compliance.summary}
+  Areas:
+${(compliance.areas || []).map(a => `    ${dot[a.status] || '•'} ${a.status.toUpperCase()} — ${a.area}: ${a.detail}`).join('\n')}
+  Flags needing attention now (${(compliance.flags || []).length}):
+${(compliance.flags || []).length ? compliance.flags.map(f => `    ⚠️ ${f}`).join('\n') : '    ✅ none'}`
+    : `
+EHO READINESS: live compliance feed unavailable right now — if asked, say the readiness feed can't be reached and fall back to the KPI snapshot above rather than inventing a status.`;
   const menu = settings.allergen_menu?.menus?.[0];
   const menuItems = menu?.items?.length || 0;
 
@@ -588,6 +622,7 @@ ${complianceBlock}
 ${kpiDashBlock}
 ${fridgeBlock}
 ${probeBlock}
+${ehoBlock}
 ${supplierBlock}
 ${deliveryBlock}
 
