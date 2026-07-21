@@ -624,8 +624,29 @@ DOCUMENT LIBRARY (HACCP & compliance documents on file — ${docs.length} total)
 ${docs.length ? Object.entries(byCat).map(([cat, titles]) => `  • ${cat} (${titles.length}): ${titles.slice(0, 8).join('; ')}${titles.length > 8 ? '; …' : ''}`).join('\n') : '  • No documents on file'}`;
 
   const nowLdn = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: LDN });
+
+  // ── Trading hours: nothing is "late" before the kitchen opens ──
+  const DAY_KEYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  const sched = settings.schedule || {};
+  const ldnNowD = new Date(new Date().toLocaleString('en-US', { timeZone: LDN }));
+  const todaySched = sched[DAY_KEYS[(ldnNowD.getDay() + 6) % 7]] || {};
+  const todayKeyLdn = new Date().toLocaleDateString('en-CA', { timeZone: LDN });
+  const closedToday = todaySched.open === false || (Array.isArray(sched.closures) && sched.closures.includes(todayKeyLdn));
+  const toM = (s, fb) => { const [h, m] = String(s || fb).split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+  const nowM = ldnNowD.getHours() * 60 + ldnNowD.getMinutes();
+  const openM = toM(todaySched.openTime, '08:00'), closeM = toM(todaySched.closeTime, '22:00');
+  const hm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  const tradingBlock = closedToday
+    ? `TRADING HOURS: the kitchen is CLOSED today — nothing is due. Do NOT chase any checks or call anything overdue.`
+    : `TRADING HOURS: open ${hm(openM)}–${hm(closeM)} today; it is now ${hm(nowM)}. ${
+        nowM < openM
+          ? `⚠️ PRE-SERVICE — the kitchen has NOT opened yet. The opening clean, fridge temps and today's logs are NOT due and are NOT late. Never chase them before ${hm(openM)}; do not call the day red or "0% done" — the day simply hasn't started.`
+          : nowM > closeM ? 'After close — the closing clean is the last thing expected.' : 'Open / in service.'
+      }`;
+
   return `
 TODAY: ${today} — right now it is ${nowLdn} (Europe/London; every time below is London time)
+${tradingBlock}
 ${kpiBlock}
 
 ACTIVE STAFF: ${users.map(u => `${u.name} (${u.role})`).join(', ')}
