@@ -211,8 +211,29 @@ DAILY REPORT — when Mark asks for a "daily report", "full report", "report of 
 Then one closing line: the most important thing (or all-clear). Example opener + tone: "Evening Mark — clean day. <b>Cleaning</b> all signed off (Hamza opened 09:56, closed 20:36), fridge temps logged morning and evening. <b>Food safety</b>: <b>6</b> cook-chill and <b>2</b> hot-holding logs, probe's calibrated for the week. Nothing needs you tonight — all clear ✅."`;
 
 // ── Morning debrief report ─────────────────────────────────────────────────
+// Dated changelog of what's shipped. The morning brief calls out anything from
+// the last couple of days so Mark always knows what's new in his app.
+// Add a new entry (newest last) whenever a feature ships.
+const SYSTEM_UPDATES = [
+  { date: '2026-07-20', text: 'Employee Management rebuilt — separate <b>Clock In/Out</b> and <b>Employee Profile</b> tabs, plus a labour-cost Overview (cost per shift / week / month vs projected, live on-shift labour, cost leaderboard).' },
+  { date: '2026-07-20', text: 'Full employee profiles — photo, contact + emergency contact, certificates with expiry, and a 6-week hours chart. Add a <b>£/hr pay rate</b> on each profile to switch all the cost figures on.' },
+  { date: '2026-07-20', text: 'Dashboard now shows <b>labour today / this week / this month</b> with projections.' },
+  { date: '2026-07-20', text: '<b>Recipe Library</b> — live recipe cards (method, ingredients, allergens, shelf life) straight from SARNIE OS, so codes and DLCs never drift.' },
+  { date: '2026-07-20', text: 'Two new sauces live: <b>Cherry Chipotle (RC-28)</b> and <b>Mild Peri Peri (RC-29)</b> — allergens declared and on the FS-006 shelf-life chart.' },
+  { date: '2026-07-20', text: 'Mobile polish — no more zoom-jump when typing in a form, instant taps, smoother scrolling and slide-up forms.' },
+  { date: '2026-07-21', text: 'Fixed: compliance alerts no longer chase the opening clean before the kitchen has opened.' },
+];
+
+// Updates from the last `days` days (London dates), newest first.
+function recentUpdates(days = 2) {
+  const todayKey = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+  const cutoff = new Date(new Date(todayKey).getTime() - days * 86400000).toISOString().slice(0, 10);
+  return SYSTEM_UPDATES.filter(u => u.date >= cutoff).reverse();
+}
+
 export async function generateMorningDebrief() {
   const context = await buildKitchenContext();
+  const updates = recentUpdates(2);
 
   const msg = await claude.messages.create({
     model: 'claude-opus-4-8',
@@ -221,14 +242,19 @@ export async function generateMorningDebrief() {
     system: SYSTEM(),
     messages: [{
       role: 'user',
-      content: `It's the 9am morning debrief — message Mark to start his day, in your usual voice (a sharp right hand giving the rundown, NOT a form or template).
+      content: `It's the morning debrief — message Mark to start his day, in your usual voice: a sharp right hand giving him the rundown over a coffee. Flowing prose, NOT a form, NOT bullet points, NOT headings. <b> on key numbers only.
 
-Cover, woven into a few natural sentences with <b> on the key numbers only:
-- A one-line greeting + honest read of yesterday (what got done, anything missed).
-- A crisp KPI line: the overall EHO status (🟢/🟡/🔴 from the EHO READINESS block) and — if pay rates are set — this week's labour cost so far and hours (from EMPLOYEE LABOUR COST). Keep it to one tight sentence, e.g. "EHO 🟢 green, labour <b>£298</b> this week (<b>23h</b>), 3 on shift."
-- Anything that needs him TODAY (overdue checks, probe point still owed this week, allergen review due, certs expiring, fridge trending warmer). If nothing, say so plainly.
-- Who's around / anything notable on staffing.
-Close with the single most important thing for today, or a simple "nothing needs you — all clear ✅". Keep it short and sharp: a good-morning message with a KPI, not a full report.
+Write it as a few natural paragraphs, in this order:
+
+1. Greeting + an honest read of where things stand — yesterday's context (what got done, what was quiet or closed) and anything he's already ticked off this morning. Tone like: "Morning Mark — quiet Sunday behind us (closed day, nothing expected), and you've already knocked out the allergen monthly review this morning, so that's ticked for the cycle. ✅"
+2. The one thing that needs him today, if there is one — and be trading-hours honest: if the kitchen hasn't opened yet, nothing is late, so frame it as what's coming, never as a miss. Then sweep everything that's clean in one sentence (probe, supplier certs, staff certs, fridges) so he knows what he doesn't have to chase.
+3. A tight KPI beat woven in: EHO status (🟢/🟡/🔴) and — only if pay rates are set — labour this week so far with hours, e.g. "EHO 🟢, labour <b>£298</b> this week (<b>23h</b>)".
+4. Who's on the floor, with clock-in times.
+5. 💡 <b>Worth a look:</b> exactly ONE improvement point — a concrete, specific suggestion drawn from the real data above (a fridge trending warmer, labour running over projection, a cert expiring in a few weeks, a check that's slipped two weeks running, a supplier gap). One or two sentences, actionable. If the data genuinely offers nothing, suggest one small operational tightening instead — never invent a problem.
+${updates.length ? `6. 🆕 <b>New in the app:</b> then briefly tell him what's just shipped, in plain operator language (what it does for him / what he should do with it), not developer changelog-speak:\n${updates.map(u => `   - ${u.text}`).join('\n')}` : ''}
+${updates.length ? '7' : '6'}. Close with "<b>Bottom line:</b>" and the single most important thing for today — or that nothing needs him and he's all square ✅.
+
+Keep it warm, specific and honest. Never chase work that isn't due yet.
 
 Current kitchen data:
 ${context}`,

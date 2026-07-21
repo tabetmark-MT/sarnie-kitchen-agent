@@ -1,13 +1,14 @@
 name: Morning Debrief
 
-# Guarantees Mark's 9am debrief even when the free Render instance is asleep —
+# Guarantees Mark's 10am debrief even when the free Render instance is asleep —
 # the request itself wakes it. GitHub cron is UTC and can't follow DST, so we
-# fire at both 08:05 and 09:05 UTC; the endpoint only sends at/after 9am London
-# and only once per day, so exactly one message goes out year-round.
+# fire at 08:05, 09:05 and 10:05 UTC; the endpoint only sends at/after 10am
+# London and only once per day, so exactly one message goes out year-round
+# (10:05 BST in summer, 10:05 GMT in winter).
 # Reuses the BACKUP_URL secret (same WEBHOOK_SECRET path) — no new secret needed.
 on:
   schedule:
-    - cron: '5 8,9 * * *'
+    - cron: '5 8,9,10 * * *'
   workflow_dispatch: {}
 
 jobs:

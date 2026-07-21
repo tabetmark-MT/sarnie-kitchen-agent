@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 3000;
 
 const OWNER_CHAT_ID   = process.env.TELEGRAM_CHAT_ID;   // 2046354154
 const WEBHOOK_SECRET  = process.env.WEBHOOK_SECRET || 'sarnie-agent-secret';
-const MORNING_HOUR    = process.env.MORNING_HOUR   || '9';   // 9am by default
+const MORNING_HOUR    = process.env.MORNING_HOUR   || '10';  // 10am — kitchen opening, when there's something to say
 const MORNING_MINUTE  = process.env.MORNING_MINUTE || '0';
 const BACKUP_HOUR     = process.env.BACKUP_HOUR    || '22';  // nightly Dropbox backup (after kitchen closes)
 const BACKUP_MINUTE   = process.env.BACKUP_MINUTE  || '0';
