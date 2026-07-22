@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { fetchSales, sumFrom, labourPct, netOf, isTraded, isMissing, isScheduledClosed, countsForAverage, getBaseline, fmtGBP } from './sales.js';
+import { fetchSales, sumFrom, labourPct, netOf, isTraded, isMissing, isScheduledClosed, countsForAverage, getBaseline, getFeedIssue, fmtGBP } from './sales.js';
 
 // The agent is a trusted server-side backend, so it reads with the service_role
 // key (bypasses RLS). The DB is now locked down — the public anon key returns
@@ -360,6 +360,7 @@ export async function buildKitchenContext() {
       const monthK = new Date(monthStart).toLocaleDateString('en-CA', { timeZone: LDN });
       // Reporting baseline: once it has passed, no aggregate reaches back before
       // it, so an earlier patchy period can never distort a trend.
+      const feedIssue = await getFeedIssue();
       const baseline = await getBaseline();
       const baselineActive = todayK >= baseline;
       const bk = baselineActive ? baseline : null;
@@ -394,9 +395,9 @@ export async function buildKitchenContext() {
 
       // Labour is measured against NET (after Deliveroo's ~27% commission) —
       // gross would flatter every ratio by roughly a third.
-      const pctT = alignedToday != null ? labourPct(alignedToday, t.net) : null;
-      const pctW = alignedWeek  != null ? labourPct(alignedWeek,  w.net) : null;
-      const pctM = alignedMonth != null ? labourPct(alignedMonth, m.net) : null;
+      const pctT = !feedIssue && alignedToday != null ? labourPct(alignedToday, t.net) : null;
+      const pctW = !feedIssue && alignedWeek  != null ? labourPct(alignedWeek,  w.net) : null;
+      const pctM = !feedIssue && alignedMonth != null ? labourPct(alignedMonth, m.net) : null;
       const baseNote = baselineActive
         ? ` Reporting baseline ${baseline}: nothing before that date is included.`
         : ` NOTE: sales reporting officially starts ${baseline}. Figures before then are PROVISIONAL — usable, but say so if Mark leans on them for a decision.`;
@@ -412,7 +413,12 @@ export async function buildKitchenContext() {
         ? ` — sales run to ${latest.date} only (Deliveroo reports T+1, one day behind by design, not a fault), so every % below compares labour and sales over that SAME window, not up to today`
         : '';
       const gaps = (n) => n.missingDays ? ` (${n.missingDays} day(s) missing from OS history — excluded)` : '';
-      salesBlock = `\nSALES (live from SARNIE OS — the source of truth for revenue). All figures are NET, i.e. after Deliveroo commission — that is the money that actually reaches us, and it is what labour % is measured against${lagNote}.${baseNote}
+      salesBlock = feedIssue
+        ? `\nSALES — ⛔ FEED UNDER INVESTIGATION, DO NOT QUOTE FIGURES.
+  ${feedIssue}
+  You must NOT give Mark a net sales figure or any labour-vs-sales percentage until this is resolved. If he asks, explain the problem in one line and say the number would be wrong. Order counts and the fact that a day traded are still reliable, so you may use those.
+  Most recent day on file: ${latest ? latest.date : 'unknown'} (${latest ? `${latest.orders} orders` : 'n/a'}).`
+        : `\nSALES (live from SARNIE OS — the source of truth for revenue). All figures are NET, i.e. after Deliveroo commission — that is the money that actually reaches us, and it is what labour % is measured against${lagNote}.${baseNote}
   ${todayLine}
   This week: net ${fmtGBP(w.net)} over ${w.tradingDays} trading day(s)${gaps(w)}${pctW != null ? ` · labour ${pctW}% of net (£${Math.round(weekCost)})` : ''}
   Month to date: net ${fmtGBP(m.net)} over ${m.tradingDays} trading day(s)${gaps(m)}${pctM != null ? ` · labour ${pctM}% of net (£${Math.round(monthCost)})` : ''}

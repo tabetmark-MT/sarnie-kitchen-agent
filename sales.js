@@ -33,6 +33,14 @@ export const DEFAULT_BASELINE = '2026-08-01';
 let cache = null;
 const TTL_MS = 10 * 60 * 1000;
 
+// A known problem with the upstream feed, if any. While this is set, the agent
+// must not quote net revenue or any labour percentage derived from it — a wrong
+// number is worse than no number, especially one that drives staffing decisions.
+export async function getFeedIssue() {
+  if (process.env.SALES_FEED_ISSUE) return process.env.SALES_FEED_ISSUE;
+  return (await getSetting('sales_feed_issue')) || null;
+}
+
 export async function getBaseline() {
   return process.env.SALES_BASELINE_DATE || (await getSetting('sales_baseline_date')) || DEFAULT_BASELINE;
 }
