@@ -1,28 +1,41 @@
 // Sales feed from SARNIE OS (the source of truth for revenue).
 //
 //   GET /api/sales[?from=YYYY-MM-DD&to=YYYY-MM-DD]
-//   → { days: [ { date, gross, net, commission, orders, cancelled, closed,
-//                 source, commissionEstimated } ] }
+//   → { coverage, days: [ { date, gross, net, commission, orders, cancelled,
+//                           scheduledClosed, traded, closed (deprecated),
+//                           source, commissionEstimated } ] }
 //
 // Auth: the shared SUPPLIER_FEED_TOKEN (same one behind /api/suppliers and
 // /api/recipes). Override with SALES_TOKEN / SALES_URL env or the
-// sarnie_sales_token / sarnie_sales_url app_settings rows if that ever changes.
+// sarnie_sales_token / sarnie_sales_url app_settings rows.
 //
-// Three rules from SARNIE OS that this module must not get wrong:
-//  1. Divide labour by `net`, NOT `gross`. Gross includes Deliveroo's ~27%
-//     commission, which never reaches us — using it flatters every ratio.
-//  2. `closed: true` (Sunday) means labour ÷ sales is UNDEFINED, not zero.
-//     Excluded from every total and average.
-//  3. `closed: false` with `orders: 0` is a HOLE in their history (missing
-//     upload), not a zero-sales day. Also excluded, and counted separately so
-//     we can say how complete the picture is.
+// Semantics, after SARNIE OS split the old `closed` flag:
+//   scheduledClosed — the rota says we don't trade (Sundays). Excluded from day
+//                     counts and averages: labour ÷ sales is undefined, not zero.
+//   traded          — money actually came in. Revenue counts whenever this is
+//                     true, INCLUDING on a scheduledClosed day, so a genuine
+//                     Sunday sale can never vanish.
+//   neither         — a day we'd normally trade but hold no data for. A HOLE in
+//                     their history, not a zero-sales day. Excluded from both.
+//
+// `closed` is kept as a deprecated fallback so an older payload still works.
 import { getSetting } from './supabase.js';
 
 const DEFAULT_URL = 'https://sarnie-inventory-app.vercel.app/api/sales';
 const SHARED_TOKEN = 'sarnie_supplier_feed_token'; // app_settings key
 
+// Reporting baseline: the date from which sales/labour reporting is considered
+// clean and official. Aggregates never reach back before this once it has
+// passed, so a patchy earlier period can't distort a trend. Overridable via
+// SALES_BASELINE_DATE env or the sales_baseline_date app_settings row.
+export const DEFAULT_BASELINE = '2026-08-01';
+
 let cache = null;
 const TTL_MS = 10 * 60 * 1000;
+
+export async function getBaseline() {
+  return process.env.SALES_BASELINE_DATE || (await getSetting('sales_baseline_date')) || DEFAULT_BASELINE;
+}
 
 export async function fetchSales({ force = false } = {}) {
   if (!force && cache && Date.now() - cache.at < TTL_MS) return cache.data;
@@ -44,7 +57,7 @@ export async function fetchSales({ force = false } = {}) {
     const days = Array.isArray(json?.days) ? json.days : [];
     if (!days.length) return null;
 
-    const data = { days: days.filter(d => d?.date) };
+    const data = { days: days.filter(d => d?.date), coverage: json.coverage || null };
     cache = { at: Date.now(), data };
     return data;
   } catch { return null; }
@@ -52,8 +65,8 @@ export async function fetchSales({ force = false } = {}) {
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-// Revenue that actually reaches us. Prefer `net`; if it's absent fall back to
-// gross minus commission, and only then to gross (flagged by the caller).
+// Revenue that actually reaches us. Prefer `net`; fall back to gross minus
+// commission, then gross.
 export function netOf(d) {
   if (Number.isFinite(Number(d?.net))) return Number(d.net);
   if (Number.isFinite(Number(d?.gross)) && Number.isFinite(Number(d?.commission))) {
@@ -62,31 +75,38 @@ export function netOf(d) {
   return num(d?.gross);
 }
 
-export const isClosed  = (d) => d?.closed === true;
-// A day we'd normally trade but hold nothing for — a gap, not a zero.
-export const isMissing = (d) => d?.closed === false && num(d?.orders) === 0;
-export const isTrading = (d) => !isClosed(d) && !isMissing(d);
-// Any day that actually took money. A "closed" Sunday can still carry a stray
-// order (19 Jul 2026 did: 1 order, £21.05) — that revenue is real and must not
-// vanish from a total just because the kitchen was nominally shut.
-export const hasSales  = (d) => num(d?.orders) > 0 || netOf(d) > 0;
+// Rota says we don't trade. New field, falling back to the deprecated one.
+export const isScheduledClosed = (d) =>
+  (typeof d?.scheduledClosed === 'boolean' ? d.scheduledClosed : d?.closed === true);
 
-// Totals from a London date key (inclusive).
-//   money  → every day that actually took sales, closed or not
-//   counts → only proper open trading days, so averages aren't dragged down
-export function sumFrom(days, fromKey) {
-  const inRange = (days || []).filter(d => d.date >= fromKey);
-  const earning = inRange.filter(hasSales);
-  const trading = inRange.filter(isTrading);
+// Money actually came in. Trust the explicit flag; infer only if absent.
+export const isTraded = (d) =>
+  (typeof d?.traded === 'boolean' ? d.traded : (num(d?.orders) > 0 || netOf(d) > 0));
+
+// A day we'd normally trade but hold nothing for — a gap, not a zero.
+export const isMissing = (d) => !isScheduledClosed(d) && !isTraded(d);
+
+// Counts toward day counts and averages: a normal open day that took money.
+export const countsForAverage = (d) => isTraded(d) && !isScheduledClosed(d);
+
+// Totals from a London date key (inclusive), clamped to the reporting baseline.
+//   money  → every day that TRADED, including a traded scheduled-closed day
+//   counts → open trading days only, so averages aren't dragged down
+export function sumFrom(days, fromKey, baselineKey = null) {
+  const from = baselineKey && baselineKey > fromKey ? baselineKey : fromKey;
+  const inRange = (days || []).filter(d => d.date >= from);
+  const earning = inRange.filter(isTraded);
   return {
+    from,
+    clampedToBaseline: !!(baselineKey && baselineKey > fromKey),
     net:       earning.reduce((s, d) => s + netOf(d), 0),
     gross:     earning.reduce((s, d) => s + num(d.gross), 0),
     orders:    earning.reduce((s, d) => s + num(d.orders), 0),
-    tradingDays: trading.length,
-    closedDays:  inRange.filter(isClosed).length,
+    tradingDays: inRange.filter(countsForAverage).length,
+    closedDays:  inRange.filter(isScheduledClosed).length,
     missingDays: inRange.filter(isMissing).length,
-    // Revenue taken on a nominally-closed day — worth knowing about, not hiding.
-    closedDaySales: earning.filter(isClosed).reduce((s, d) => s + netOf(d), 0),
+    // Revenue taken on a day the rota said we were shut — visible, not hidden.
+    closedDaySales: earning.filter(isScheduledClosed).reduce((s, d) => s + netOf(d), 0),
     estimated:   earning.some(d => d?.commissionEstimated === true),
   };
 }

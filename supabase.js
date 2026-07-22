@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { fetchSales, sumFrom, labourPct, netOf, isTrading, isMissing, fmtGBP } from './sales.js';
+import { fetchSales, sumFrom, labourPct, netOf, isTraded, isMissing, isScheduledClosed, countsForAverage, getBaseline, fmtGBP } from './sales.js';
 
 // The agent is a trusted server-side backend, so it reads with the service_role
 // key (bypasses RLS). The DB is now locked down — the public anon key returns
@@ -358,9 +358,14 @@ export async function buildKitchenContext() {
       const todayK = new Date().toLocaleDateString('en-CA', { timeZone: LDN });
       const weekK = new Date(weekStart).toLocaleDateString('en-CA', { timeZone: LDN });
       const monthK = new Date(monthStart).toLocaleDateString('en-CA', { timeZone: LDN });
-      const t = sumFrom(sales.days, todayK), w = sumFrom(sales.days, weekK), m = sumFrom(sales.days, monthK);
+      // Reporting baseline: once it has passed, no aggregate reaches back before
+      // it, so an earlier patchy period can never distort a trend.
+      const baseline = await getBaseline();
+      const baselineActive = todayK >= baseline;
+      const bk = baselineActive ? baseline : null;
+      const t = sumFrom(sales.days, todayK, bk), w = sumFrom(sales.days, weekK, bk), m = sumFrom(sales.days, monthK, bk);
       const todayCost = payEmps.reduce((s, e) => s + (minsSince(e, startOfToday.getTime()) / 60) * empRate(e), 0);
-      const latest = [...sales.days].filter(isTrading).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+      const latest = [...sales.days].filter(countsForAverage).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
 
       // The sales feed lags — it ends at `latest` (yesterday or earlier), while
       // wages accrue up to this minute. Dividing a full week of labour by a
@@ -372,11 +377,13 @@ export async function buildKitchenContext() {
       // OS has no data for (20 Jul) still cost us wages, so counting that labour
       // against sales that exclude it inflates the ratio just as badly.
       const coveredDays = new Set(sales.days.filter(d => !isMissing(d)).map(d => d.date));
+      const baselineMs = baselineActive ? ldnMidnightOf(baseline) : 0;
       const costOnCoveredDays = (fromMs) => payEmps.reduce((sum, e) => {
         let mins = 0;
+        const floor = Math.max(fromMs, baselineMs);
         for (const key of coveredDays) {
           const ds = ldnMidnightOf(key);
-          if (ds < fromMs || ds >= salesEndMs) continue;
+          if (ds < floor || ds >= salesEndMs) continue;
           mins += minsBetween(e, ds, ds + 86400000);
         }
         return sum + (mins / 60) * empRate(e);
@@ -390,17 +397,20 @@ export async function buildKitchenContext() {
       const pctT = alignedToday != null ? labourPct(alignedToday, t.net) : null;
       const pctW = alignedWeek  != null ? labourPct(alignedWeek,  w.net) : null;
       const pctM = alignedMonth != null ? labourPct(alignedMonth, m.net) : null;
+      const baseNote = baselineActive
+        ? ` Reporting baseline ${baseline}: nothing before that date is included.`
+        : ` NOTE: sales reporting officially starts ${baseline}. Figures before then are PROVISIONAL — usable, but say so if Mark leans on them for a decision.`;
       const lagNote = latest && latest.date < todayK
         ? ` — sales only run to ${latest.date}, so every % below compares labour and sales over that SAME window, not up to today`
         : '';
       const gaps = (n) => n.missingDays ? ` (${n.missingDays} day(s) missing from OS history — excluded)` : '';
-      salesBlock = `\nSALES (live from SARNIE OS — the source of truth for revenue). All figures are NET, i.e. after Deliveroo commission — that is the money that actually reaches us, and it is what labour % is measured against${lagNote}:
+      salesBlock = `\nSALES (live from SARNIE OS — the source of truth for revenue). All figures are NET, i.e. after Deliveroo commission — that is the money that actually reaches us, and it is what labour % is measured against${lagNote}.${baseNote}
   Today: net ${fmtGBP(t.net)}${t.orders ? ` across ${t.orders} orders` : ''}${pctT != null ? ` · labour ${pctT}% of net` : ''}
   This week: net ${fmtGBP(w.net)} over ${w.tradingDays} trading day(s)${gaps(w)}${pctW != null ? ` · labour ${pctW}% of net (£${Math.round(weekCost)})` : ''}
   Month to date: net ${fmtGBP(m.net)} over ${m.tradingDays} trading day(s)${gaps(m)}${pctM != null ? ` · labour ${pctM}% of net (£${Math.round(monthCost)})` : ''}
   Most recent trading day on file: ${latest ? `${latest.date} — net ${fmtGBP(netOf(latest))} (gross ${fmtGBP(Number(latest.gross) || 0)})` : 'none'}
   ${m.estimated ? 'Note: at least one day had no commission figure, so 27% was assumed — treat as slightly approximate.\n  ' : ''}RULES YOU MUST FOLLOW:
-  • Sundays are CLOSED — labour ÷ sales is undefined, not zero. Never average them in.
+  • Sundays are scheduled-closed — labour ÷ sales is undefined, not zero. Never average them in. If one ever DOES take money it still counts as revenue.
   • A trading day with no data is a GAP in the OS history, not a zero-sales day. Never describe one as "no sales".
   • Quote NET, not gross, when talking about labour percentages. Say "net" so Mark knows which it is.
   • Healthy labour is roughly 25–35% of net. Flag it only when clearly outside that.
