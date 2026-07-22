@@ -66,19 +66,28 @@ export const isClosed  = (d) => d?.closed === true;
 // A day we'd normally trade but hold nothing for — a gap, not a zero.
 export const isMissing = (d) => d?.closed === false && num(d?.orders) === 0;
 export const isTrading = (d) => !isClosed(d) && !isMissing(d);
+// Any day that actually took money. A "closed" Sunday can still carry a stray
+// order (19 Jul 2026 did: 1 order, £21.05) — that revenue is real and must not
+// vanish from a total just because the kitchen was nominally shut.
+export const hasSales  = (d) => num(d?.orders) > 0 || netOf(d) > 0;
 
-// Totals from a London date key (inclusive), counting only real trading days.
+// Totals from a London date key (inclusive).
+//   money  → every day that actually took sales, closed or not
+//   counts → only proper open trading days, so averages aren't dragged down
 export function sumFrom(days, fromKey) {
   const inRange = (days || []).filter(d => d.date >= fromKey);
+  const earning = inRange.filter(hasSales);
   const trading = inRange.filter(isTrading);
   return {
-    net:       trading.reduce((s, d) => s + netOf(d), 0),
-    gross:     trading.reduce((s, d) => s + num(d.gross), 0),
-    orders:    trading.reduce((s, d) => s + num(d.orders), 0),
+    net:       earning.reduce((s, d) => s + netOf(d), 0),
+    gross:     earning.reduce((s, d) => s + num(d.gross), 0),
+    orders:    earning.reduce((s, d) => s + num(d.orders), 0),
     tradingDays: trading.length,
     closedDays:  inRange.filter(isClosed).length,
     missingDays: inRange.filter(isMissing).length,
-    estimated:   trading.some(d => d?.commissionEstimated === true),
+    // Revenue taken on a nominally-closed day — worth knowing about, not hiding.
+    closedDaySales: earning.filter(isClosed).reduce((s, d) => s + netOf(d), 0),
+    estimated:   earning.some(d => d?.commissionEstimated === true),
   };
 }
 
