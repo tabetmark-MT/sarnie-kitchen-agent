@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { fetchSales, sumFrom, labourPct, netOf, isTraded, isMissing, isScheduledClosed, countsForAverage, getBaseline, getFeedIssue, fmtGBP } from './sales.js';
+import { fetchSales, sumFrom, labourPct, netOf, isTraded, isMissing, isScheduledClosed, countsForAverage, getBaseline, getFeedIssue, getVatRate, exVat, fmtGBP } from './sales.js';
 
 // The agent is a trusted server-side backend, so it reads with the service_role
 // key (bypasses RLS). The DB is now locked down — the public anon key returns
@@ -361,6 +361,7 @@ export async function buildKitchenContext() {
       // Reporting baseline: once it has passed, no aggregate reaches back before
       // it, so an earlier patchy period can never distort a trend.
       const feedIssue = await getFeedIssue();
+      const vatRate = await getVatRate();
       const baseline = await getBaseline();
       const baselineActive = todayK >= baseline;
       const bk = baselineActive ? baseline : null;
@@ -395,9 +396,17 @@ export async function buildKitchenContext() {
 
       // Labour is measured against NET (after Deliveroo's ~27% commission) —
       // gross would flatter every ratio by roughly a third.
-      const pctT = !feedIssue && alignedToday != null ? labourPct(alignedToday, t.net) : null;
-      const pctW = !feedIssue && alignedWeek  != null ? labourPct(alignedWeek,  w.net) : null;
-      const pctM = !feedIssue && alignedMonth != null ? labourPct(alignedMonth, m.net) : null;
+      // Labour % is measured against TURNOVER EX-VAT — standard restaurant
+      // practice, and what the 25-35% benchmark actually refers to. Deliveroo's
+      // commission is a cost of sale, not a reduction in turnover, so it does
+      // NOT come off this denominator. Derived from orderValue, the one revenue
+      // field reconciled to Deliveroo's own remittance statement.
+      const exT = exVat(t.orderValue, vatRate);
+      const exW = exVat(w.orderValue, vatRate);
+      const exM = exVat(m.orderValue, vatRate);
+      const pctT = alignedToday != null ? labourPct(alignedToday, exT) : null;
+      const pctW = alignedWeek  != null ? labourPct(alignedWeek,  exW) : null;
+      const pctM = alignedMonth != null ? labourPct(alignedMonth, exM) : null;
       const baseNote = baselineActive
         ? ` Reporting baseline ${baseline}: nothing before that date is included.`
         : ` NOTE: sales reporting officially starts ${baseline}. Figures before then are PROVISIONAL — usable, but say so if Mark leans on them for a decision.`;
@@ -418,16 +427,18 @@ export async function buildKitchenContext() {
   ${feedIssue}
   You must NOT give Mark a net sales figure or any labour-vs-sales percentage until this is resolved. If he asks, explain the problem in one line and say the number would be wrong. Order counts and the fact that a day traded are still reliable, so you may use those.
   Most recent day on file: ${latest ? latest.date : 'unknown'} (${latest ? `${latest.orders} orders` : 'n/a'}).`
-        : `\nSALES (live from SARNIE OS — the source of truth for revenue). All figures are NET, i.e. after Deliveroo commission — that is the money that actually reaches us, and it is what labour % is measured against${lagNote}.${baseNote}
+        : `\nSALES (live from SARNIE OS — the source of truth for revenue). Labour % is measured against TURNOVER EX-VAT (Deliveroo's Total Order Value ÷ ${(1 + vatRate).toFixed(2)}), which is standard restaurant practice and what the 25-35% benchmark means${lagNote}.${baseNote}
   ${todayLine}
-  This week: net ${fmtGBP(w.net)} over ${w.tradingDays} trading day(s)${gaps(w)}${pctW != null ? ` · labour ${pctW}% of net (£${Math.round(weekCost)})` : ''}
-  Month to date: net ${fmtGBP(m.net)} over ${m.tradingDays} trading day(s)${gaps(m)}${pctM != null ? ` · labour ${pctM}% of net (£${Math.round(monthCost)})` : ''}
-  Most recent trading day on file: ${latest ? `${latest.date} — net ${fmtGBP(netOf(latest))} (gross ${fmtGBP(Number(latest.gross) || 0)})` : 'none'}
+  This week: turnover ex-VAT ${fmtGBP(exW)} (order value ${fmtGBP(w.orderValue)} inc VAT) over ${w.tradingDays} trading day(s)${gaps(w)}${pctW != null ? ` · labour ${pctW}% of ex-VAT turnover (£${Math.round(alignedWeek)})` : ''}
+  Month to date: turnover ex-VAT ${fmtGBP(exM)} (order value ${fmtGBP(m.orderValue)} inc VAT) over ${m.tradingDays} trading day(s)${gaps(m)}${pctM != null ? ` · labour ${pctM}% of ex-VAT turnover (£${Math.round(alignedMonth)})` : ''}
+  Most recent trading day on file: ${latest ? `${latest.date} — order value ${fmtGBP(Number(latest.gross) || 0)} inc VAT (${fmtGBP(exVat(Number(latest.gross) || 0, vatRate))} ex-VAT)` : 'none'}
   ${m.estimated ? 'Note: at least one day had no commission figure, so 27% was assumed — treat as slightly approximate.\n  ' : ''}RULES YOU MUST FOLLOW:
   • Sundays are scheduled-closed — labour ÷ sales is undefined, not zero. Never average them in. If one ever DOES take money it still counts as revenue.
   • A trading day with no data is a GAP in the OS history, not a zero-sales day. Never describe one as "no sales".
   • Sales are ALWAYS one day behind (Deliveroo T+1). There is no same-day figure and there never will be on this feed. If Mark asks how today is going, say the figure arrives tomorrow morning — do not report today as £0, and do not treat the lag as a broken feed.
-  • Quote NET, not gross, when talking about labour percentages. Say "net" so Mark knows which it is.
+  • Say "ex-VAT turnover" when you quote the denominator, so Mark knows which figure it is. Deliveroo's commission is a COST OF SALE and does NOT reduce turnover — never subtract it before working out labour %.
+  • Do NOT quote a "net sales" or payout figure from this feed. Its net field omits VAT on commission and per-statement fees, so it overstates the money actually banked by roughly 18%. Order value and ex-VAT turnover are reconciled and safe; payout is not.
+  • Deliveroo's real take is about 38% of order value (27% commission + 20% VAT on that + advertising/refund fees). If Mark asks what Deliveroo costs him, use ~38%, not 27%.
   • Healthy labour is roughly 25–35% of net. Flag it only when clearly outside that.
   • The labour figures inside each % have ALREADY been trimmed to the days sales cover, so the percentages are like-for-like. The standalone labour £ totals in the EMPLOYEE LABOUR COST block run to today and are therefore LARGER — never divide those by these sales figures yourself.`;
     }

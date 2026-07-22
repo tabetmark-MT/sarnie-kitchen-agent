@@ -41,6 +41,21 @@ export async function getFeedIssue() {
   return (await getSetting('sales_feed_issue')) || null;
 }
 
+// VAT rate applied to menu prices, used to convert Deliveroo's Total Order
+// Value (which customers pay VAT-inclusive) into ex-VAT turnover — the
+// standard denominator for a restaurant labour %. Configurable because not
+// every line is standard-rated: hot food is 20% but cold takeaway is
+// zero-rated, so a menu that shifts cold would need this revisited.
+export async function getVatRate() {
+  const v = process.env.SALES_VAT_RATE || (await getSetting('sales_vat_rate'));
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 && n < 1 ? n : 0.20;
+}
+
+// Turnover excluding VAT from a VAT-inclusive order value.
+export const exVat = (orderValueIncVat, vatRate = 0.20) =>
+  (Number(orderValueIncVat) || 0) / (1 + vatRate);
+
 export async function getBaseline() {
   return process.env.SALES_BASELINE_DATE || (await getSetting('sales_baseline_date')) || DEFAULT_BASELINE;
 }
@@ -108,7 +123,12 @@ export function sumFrom(days, fromKey, baselineKey = null) {
     from,
     clampedToBaseline: !!(baselineKey && baselineKey > fromKey),
     net:       earning.reduce((s, d) => s + netOf(d), 0),
+    // `gross` from the feed IS Deliveroo's Total Order Value — verified against
+    // the 13-19 Jul remittance statement (343 orders, £7,268.90 vs £7,269.89).
+    // This is the only revenue field we trust; the feed's `net` overstates the
+    // actual payout by ~18% because it omits commission VAT and additional fees.
     gross:     earning.reduce((s, d) => s + num(d.gross), 0),
+    orderValue: earning.reduce((s, d) => s + num(d.gross), 0),
     orders:    earning.reduce((s, d) => s + num(d.orders), 0),
     tradingDays: inRange.filter(countsForAverage).length,
     closedDays:  inRange.filter(isScheduledClosed).length,
