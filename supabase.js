@@ -323,15 +323,28 @@ export async function buildKitchenContext() {
     const c = (wm / 60) * empRate(emp);
     weekCost += c;
     monthCost += (minsSince(emp, monthStart.getTime()) / 60) * empRate(emp);
-    return (wm > 0 && empRate(emp) > 0) ? `  • ${emp.name}: ${fmtH(wm)} × £${empRate(emp).toFixed(2)}/h = £${Math.round(c)}` : null;
+    if (wm <= 0) return null;
+    // Unpaid interns are shown with their hours and an explicit £0 — their time
+    // is real and worth seeing on the rota, it just carries no wage cost.
+    if (empRate(emp) === 0) {
+      return emp.unpaid || emp.empType === 'intern'
+        ? `  • ${emp.name}: ${fmtH(wm)} — unpaid intern, £0 (correct, not missing data)`
+        : `  • ${emp.name}: ${fmtH(wm)} — NO RATE SET, excluded from the totals`;
+    }
+    return `  • ${emp.name}: ${fmtH(wm)} × £${empRate(emp).toFixed(2)}/h = £${Math.round(c)}`;
   }).filter(Boolean);
   const domNow = new Date().getDate();
   const dim = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
   const projMonthCost = domNow ? Math.round((monthCost / domNow) * dim) : 0;
-  const unratedNames = payEmps.filter(e => empRate(e) === 0 && minsSince(e, weekStart.getTime()) > 0).map(e => e.name);
+  // Only staff who SHOULD have a rate but don't are a data problem. An unpaid
+  // intern on £0 is a fact about the business, not a gap in the records.
+  const worked = (e) => minsSince(e, weekStart.getTime()) > 0;
+  const unratedNames = payEmps.filter(e => empRate(e) === 0 && worked(e) && !(e.unpaid || e.empType === 'intern')).map(e => e.name);
+  const unpaidNames  = payEmps.filter(e => empRate(e) === 0 && worked(e) &&  (e.unpaid || e.empType === 'intern')).map(e => e.name);
   const labourBlock = anyRates
     ? `\nEMPLOYEE LABOUR COST (pay rate × clocked hours — admin data; answer Mark's cost questions from here):\n  This week so far: £${Math.round(weekCost)} · Month to date: £${Math.round(monthCost)} · Projected month: £${projMonthCost}\n${labourLines.join('\n')}${
-        unratedNames.length ? `\n  ⚠️ On £0/hr so contributing nothing to these totals: ${unratedNames.join(', ')} — the figures above are UNDERSTATED by their hours. Say so if you quote a labour cost.` : ''}`
+        unratedNames.length ? `\n  ⚠️ Worked this week but has NO pay rate set: ${unratedNames.join(', ')} — the totals above are UNDERSTATED by their hours. Say so if you quote a labour cost, and suggest adding their rate.` : ''}${
+        unpaidNames.length ? `\n  ℹ️ Unpaid intern(s) this week: ${unpaidNames.join(', ')}. Their hours are real but cost £0 by design, so these totals are CORRECT — never describe them as understated, and never suggest putting a rate on an intern.` : ''}`
     : `\nEMPLOYEE LABOUR COST: no pay rates set yet — if Mark asks, tell him to add £/hr on each Employee Profile (Employee Management → Employee Profile, management only) to unlock labour costing.`;
 
   // ── Sales (live from SARNIE OS) + labour as a % of sales ──
