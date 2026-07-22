@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { fetchSales, sumFrom, labourPct, netOf, isTrading, fmtGBP } from './sales.js';
+import { fetchSales, sumFrom, labourPct, netOf, isTrading, isMissing, fmtGBP } from './sales.js';
 
 // The agent is a trusted server-side backend, so it reads with the service_role
 // key (bypasses RLS). The DB is now locked down — the public anon key returns
@@ -35,6 +35,31 @@ export function ldnMidnight(daysAgo = 0) {
   w.setDate(w.getDate() - daysAgo);
   w.setHours(0, 0, 0, 0);
   return new Date(w.getTime() + off);
+}
+
+// How far ahead of UTC a timezone is at a given instant, in ms. Derived from
+// Intl rather than the host clock, so it is correct whether this runs on a UTC
+// server (Render) or a London laptop.
+function tzOffsetMs(instant, tz) {
+  const p = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(instant).reduce((a, x) => (a[x.type] = x.value, a), {});
+  const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second);
+  return asUTC - instant.getTime();
+}
+
+// London midnight (as a real UTC instant) for a YYYY-MM-DD date key.
+// In BST that is 23:00 UTC the previous day — getting this wrong shifts every
+// labour/sales alignment by an hour.
+export function ldnMidnightOf(dateKey) {
+  const [y, m, d] = String(dateKey).split('-').map(Number);
+  if (!y || !m || !d) return 0;
+  const guess = Date.UTC(y, m - 1, d, 0, 0, 0);
+  // Resolve against the offset in force on that date (handles DST boundaries).
+  const off = tzOffsetMs(new Date(guess), LDN);
+  return guess - off;
 }
 
 // ── Fetch today's completions ──────────────────────────────────────────────
@@ -281,6 +306,15 @@ export async function buildKitchenContext() {
   const minsSince = (emp, fromMs) => timeEntries
     .filter(e => e.employeeId === emp.id && (e.clockOut ? new Date(e.clockOut).getTime() : nowMs) >= fromMs)
     .reduce((s, e) => s + entryMins(e, fromMs), 0);
+  // Clocked minutes inside a bounded window — needed to line labour up with the
+  // period the sales feed actually covers.
+  const minsBetween = (emp, fromMs, toMs) => timeEntries
+    .filter(e => e.employeeId === emp.id)
+    .reduce((s, e) => {
+      const st = Math.max(new Date(e.clockIn).getTime(), fromMs);
+      const en = Math.min(e.clockOut ? new Date(e.clockOut).getTime() : nowMs, toMs);
+      return s + Math.max(0, (en - st) / 60000);
+    }, 0);
   const payEmps = employees.filter(e => e.active !== false);
   const anyRates = payEmps.some(e => empRate(e) > 0);
   let weekCost = 0, monthCost = 0;
@@ -313,12 +347,41 @@ export async function buildKitchenContext() {
       const monthK = new Date(monthStart).toLocaleDateString('en-CA', { timeZone: LDN });
       const t = sumFrom(sales.days, todayK), w = sumFrom(sales.days, weekK), m = sumFrom(sales.days, monthK);
       const todayCost = payEmps.reduce((s, e) => s + (minsSince(e, startOfToday.getTime()) / 60) * empRate(e), 0);
+      const latest = [...sales.days].filter(isTrading).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+
+      // The sales feed lags — it ends at `latest` (yesterday or earlier), while
+      // wages accrue up to this minute. Dividing a full week of labour by a
+      // part-week of sales produces garbage (81% instead of ~27%), so the labour
+      // side is CAPPED to the last day sales actually cover, and the comparison
+      // window is stated so the number can be read honestly.
+      const salesEndMs = latest ? ldnMidnightOf(latest.date) + 86400000 : 0;
+      // Match on the same SET of days, not merely the same end date. A day the
+      // OS has no data for (20 Jul) still cost us wages, so counting that labour
+      // against sales that exclude it inflates the ratio just as badly.
+      const coveredDays = new Set(sales.days.filter(d => !isMissing(d)).map(d => d.date));
+      const costOnCoveredDays = (fromMs) => payEmps.reduce((sum, e) => {
+        let mins = 0;
+        for (const key of coveredDays) {
+          const ds = ldnMidnightOf(key);
+          if (ds < fromMs || ds >= salesEndMs) continue;
+          mins += minsBetween(e, ds, ds + 86400000);
+        }
+        return sum + (mins / 60) * empRate(e);
+      }, 0);
+      const alignedToday = coveredDays.has(todayK) ? todayCost : null;
+      const alignedWeek  = salesEndMs > weekStart.getTime()  ? costOnCoveredDays(weekStart.getTime())  : null;
+      const alignedMonth = salesEndMs > monthStart.getTime() ? costOnCoveredDays(monthStart.getTime()) : null;
+
       // Labour is measured against NET (after Deliveroo's ~27% commission) —
       // gross would flatter every ratio by roughly a third.
-      const pctT = labourPct(todayCost, t.net), pctW = labourPct(weekCost, w.net), pctM = labourPct(monthCost, m.net);
-      const latest = [...sales.days].filter(isTrading).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+      const pctT = alignedToday != null ? labourPct(alignedToday, t.net) : null;
+      const pctW = alignedWeek  != null ? labourPct(alignedWeek,  w.net) : null;
+      const pctM = alignedMonth != null ? labourPct(alignedMonth, m.net) : null;
+      const lagNote = latest && latest.date < todayK
+        ? ` — sales only run to ${latest.date}, so every % below compares labour and sales over that SAME window, not up to today`
+        : '';
       const gaps = (n) => n.missingDays ? ` (${n.missingDays} day(s) missing from OS history — excluded)` : '';
-      salesBlock = `\nSALES (live from SARNIE OS — the source of truth for revenue). All figures are NET, i.e. after Deliveroo commission — that is the money that actually reaches us, and it is what labour % is measured against:
+      salesBlock = `\nSALES (live from SARNIE OS — the source of truth for revenue). All figures are NET, i.e. after Deliveroo commission — that is the money that actually reaches us, and it is what labour % is measured against${lagNote}:
   Today: net ${fmtGBP(t.net)}${t.orders ? ` across ${t.orders} orders` : ''}${pctT != null ? ` · labour ${pctT}% of net` : ''}
   This week: net ${fmtGBP(w.net)} over ${w.tradingDays} trading day(s)${gaps(w)}${pctW != null ? ` · labour ${pctW}% of net (£${Math.round(weekCost)})` : ''}
   Month to date: net ${fmtGBP(m.net)} over ${m.tradingDays} trading day(s)${gaps(m)}${pctM != null ? ` · labour ${pctM}% of net (£${Math.round(monthCost)})` : ''}
@@ -327,7 +390,8 @@ export async function buildKitchenContext() {
   • Sundays are CLOSED — labour ÷ sales is undefined, not zero. Never average them in.
   • A trading day with no data is a GAP in the OS history, not a zero-sales day. Never describe one as "no sales".
   • Quote NET, not gross, when talking about labour percentages. Say "net" so Mark knows which it is.
-  • Healthy labour is roughly 25–35% of net. Flag it only when clearly outside that, and only when labour and sales cover the SAME period.`;
+  • Healthy labour is roughly 25–35% of net. Flag it only when clearly outside that.
+  • The labour figures inside each % have ALREADY been trimmed to the days sales cover, so the percentages are like-for-like. The standalone labour £ totals in the EMPLOYEE LABOUR COST block run to today and are therefore LARGER — never divide those by these sales figures yourself.`;
     }
   } catch { /* fail soft — keep the "not connected" line */ }
   const monthHours = hoursLine(monthStart.getTime());
