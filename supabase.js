@@ -400,18 +400,27 @@ export async function buildKitchenContext() {
       const baseNote = baselineActive
         ? ` Reporting baseline ${baseline}: nothing before that date is included.`
         : ` NOTE: sales reporting officially starts ${baseline}. Figures before then are PROVISIONAL — usable, but say so if Mark leans on them for a decision.`;
+      // Deliveroo's Enterprise Data Reporting is T+1 BY DESIGN: a file dropped
+      // today covers yesterday. So "today" is never in the feed, and rendering
+      // "Today: net £0.00" would read as "no sales today" — the exact false-zero
+      // we keep guarding against. State the absence instead of implying a zero.
+      const todayInFeed = sales.days.some(d => d.date === todayK && isTraded(d));
+      const todayLine = todayInFeed
+        ? `Today: net ${fmtGBP(t.net)}${t.orders ? ` across ${t.orders} orders` : ''}${pctT != null ? ` · labour ${pctT}% of net` : ''}`
+        : `Today (${todayK}): NO FIGURE YET — Deliveroo reports T+1, so today's sales land tomorrow morning. This is NOT zero sales; never say the kitchen took nothing today. The freshest complete day is ${latest ? latest.date : 'unknown'}.`;
       const lagNote = latest && latest.date < todayK
-        ? ` — sales only run to ${latest.date}, so every % below compares labour and sales over that SAME window, not up to today`
+        ? ` — sales run to ${latest.date} only (Deliveroo reports T+1, one day behind by design, not a fault), so every % below compares labour and sales over that SAME window, not up to today`
         : '';
       const gaps = (n) => n.missingDays ? ` (${n.missingDays} day(s) missing from OS history — excluded)` : '';
       salesBlock = `\nSALES (live from SARNIE OS — the source of truth for revenue). All figures are NET, i.e. after Deliveroo commission — that is the money that actually reaches us, and it is what labour % is measured against${lagNote}.${baseNote}
-  Today: net ${fmtGBP(t.net)}${t.orders ? ` across ${t.orders} orders` : ''}${pctT != null ? ` · labour ${pctT}% of net` : ''}
+  ${todayLine}
   This week: net ${fmtGBP(w.net)} over ${w.tradingDays} trading day(s)${gaps(w)}${pctW != null ? ` · labour ${pctW}% of net (£${Math.round(weekCost)})` : ''}
   Month to date: net ${fmtGBP(m.net)} over ${m.tradingDays} trading day(s)${gaps(m)}${pctM != null ? ` · labour ${pctM}% of net (£${Math.round(monthCost)})` : ''}
   Most recent trading day on file: ${latest ? `${latest.date} — net ${fmtGBP(netOf(latest))} (gross ${fmtGBP(Number(latest.gross) || 0)})` : 'none'}
   ${m.estimated ? 'Note: at least one day had no commission figure, so 27% was assumed — treat as slightly approximate.\n  ' : ''}RULES YOU MUST FOLLOW:
   • Sundays are scheduled-closed — labour ÷ sales is undefined, not zero. Never average them in. If one ever DOES take money it still counts as revenue.
   • A trading day with no data is a GAP in the OS history, not a zero-sales day. Never describe one as "no sales".
+  • Sales are ALWAYS one day behind (Deliveroo T+1). There is no same-day figure and there never will be on this feed. If Mark asks how today is going, say the figure arrives tomorrow morning — do not report today as £0, and do not treat the lag as a broken feed.
   • Quote NET, not gross, when talking about labour percentages. Say "net" so Mark knows which it is.
   • Healthy labour is roughly 25–35% of net. Flag it only when clearly outside that.
   • The labour figures inside each % have ALREADY been trimmed to the days sales cover, so the percentages are like-for-like. The standalone labour £ totals in the EMPLOYEE LABOUR COST block run to today and are therefore LARGER — never divide those by these sales figures yourself.`;
