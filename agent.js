@@ -252,6 +252,8 @@ Write it as a few natural paragraphs, in this order:
 2. The one thing that needs him today, if there is one — and be trading-hours honest: if the kitchen hasn't opened yet, nothing is late, so frame it as what's coming, never as a miss. Then sweep everything that's clean in one sentence (probe, supplier certs, staff certs, fridges) so he knows what he doesn't have to chase.
 3. A tight KPI beat woven in: EHO status (🟢/🟡/🔴), then — only if the data is actually there — yesterday's/this week's <b>sales</b>, labour cost, and <b>labour as a % of sales</b>, e.g. "EHO 🟢, sales <b>£2,140</b> this week against <b>£298</b> labour — <b>13.9%</b>". Rules you must not break:
    - If the SALES block says the feed is not connected, say nothing about revenue at all. Do NOT guess, estimate or infer a sales figure from anything else.
+   - Sales figures are NET (after Deliveroo's commission). Say "net" when you quote one, and never quote gross as if it were takings.
+   - Sundays are closed and some days are missing from the OS history — the block excludes both. Never call a missing day a zero-sales day.
    - Only compare labour and sales over the SAME period. Never put a week of wages against a day of sales.
    - If anyone is on £0/hr, the labour figure is understated — say so in passing rather than quoting it as exact.
    - Healthy labour is roughly 25–35% of sales. Call it out only if it is clearly outside that, and say plainly what it was.

@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { fetchSales, sumFrom, labourPct } from './sales.js';
+import { fetchSales, sumFrom, labourPct, netOf, isTrading, fmtGBP } from './sales.js';
 
 // The agent is a trusted server-side backend, so it reads with the service_role
 // key (bypasses RLS). The DB is now locked down — the public anon key returns
@@ -313,14 +313,21 @@ export async function buildKitchenContext() {
       const monthK = new Date(monthStart).toLocaleDateString('en-CA', { timeZone: LDN });
       const t = sumFrom(sales.days, todayK), w = sumFrom(sales.days, weekK), m = sumFrom(sales.days, monthK);
       const todayCost = payEmps.reduce((s, e) => s + (minsSince(e, startOfToday.getTime()) / 60) * empRate(e), 0);
-      const pctT = labourPct(todayCost, t.gross), pctW = labourPct(weekCost, w.gross), pctM = labourPct(monthCost, m.gross);
-      const latest = [...sales.days].sort((a, b) => (a.date < b.date ? 1 : -1))[0];
-      salesBlock = `\nSALES (live from SARNIE OS — the source of truth for revenue):
-  Today: £${t.gross.toFixed(2)}${t.orders ? ` across ${t.orders} orders` : ''}${pctT != null ? ` · labour ${pctT}% of sales` : ''}
-  This week: £${w.gross.toFixed(2)} over ${w.n} day(s)${pctW != null ? ` · labour ${pctW}% of sales (£${Math.round(weekCost)})` : ''}
-  Month to date: £${m.gross.toFixed(2)} over ${m.n} day(s)${pctM != null ? ` · labour ${pctM}% of sales (£${Math.round(monthCost)})` : ''}
-  Most recent day on file: ${latest.date} — £${gross(latest).toFixed(2)}
-  LABOUR % RULE: a healthy kitchen runs roughly 25–35% labour. Flag it if it is well above that, but only when the sales figure covers the same period as the labour figure — never compare a full week of wages against one day of sales.`;
+      // Labour is measured against NET (after Deliveroo's ~27% commission) —
+      // gross would flatter every ratio by roughly a third.
+      const pctT = labourPct(todayCost, t.net), pctW = labourPct(weekCost, w.net), pctM = labourPct(monthCost, m.net);
+      const latest = [...sales.days].filter(isTrading).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+      const gaps = (n) => n.missingDays ? ` (${n.missingDays} day(s) missing from OS history — excluded)` : '';
+      salesBlock = `\nSALES (live from SARNIE OS — the source of truth for revenue). All figures are NET, i.e. after Deliveroo commission — that is the money that actually reaches us, and it is what labour % is measured against:
+  Today: net ${fmtGBP(t.net)}${t.orders ? ` across ${t.orders} orders` : ''}${pctT != null ? ` · labour ${pctT}% of net` : ''}
+  This week: net ${fmtGBP(w.net)} over ${w.tradingDays} trading day(s)${gaps(w)}${pctW != null ? ` · labour ${pctW}% of net (£${Math.round(weekCost)})` : ''}
+  Month to date: net ${fmtGBP(m.net)} over ${m.tradingDays} trading day(s)${gaps(m)}${pctM != null ? ` · labour ${pctM}% of net (£${Math.round(monthCost)})` : ''}
+  Most recent trading day on file: ${latest ? `${latest.date} — net ${fmtGBP(netOf(latest))} (gross ${fmtGBP(Number(latest.gross) || 0)})` : 'none'}
+  ${m.estimated ? 'Note: at least one day had no commission figure, so 27% was assumed — treat as slightly approximate.\n  ' : ''}RULES YOU MUST FOLLOW:
+  • Sundays are CLOSED — labour ÷ sales is undefined, not zero. Never average them in.
+  • A trading day with no data is a GAP in the OS history, not a zero-sales day. Never describe one as "no sales".
+  • Quote NET, not gross, when talking about labour percentages. Say "net" so Mark knows which it is.
+  • Healthy labour is roughly 25–35% of net. Flag it only when clearly outside that, and only when labour and sales cover the SAME period.`;
     }
   } catch { /* fail soft — keep the "not connected" line */ }
   const monthHours = hoursLine(monthStart.getTime());
