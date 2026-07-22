@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { fetchSales, sumFrom, labourPct } from './sales.js';
 
 // The agent is a trusted server-side backend, so it reads with the service_role
 // key (bypasses RLS). The DB is now locked down — the public anon key returns
@@ -293,9 +294,35 @@ export async function buildKitchenContext() {
   const domNow = new Date().getDate();
   const dim = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
   const projMonthCost = domNow ? Math.round((monthCost / domNow) * dim) : 0;
+  const unratedNames = payEmps.filter(e => empRate(e) === 0 && minsSince(e, weekStart.getTime()) > 0).map(e => e.name);
   const labourBlock = anyRates
-    ? `\nEMPLOYEE LABOUR COST (pay rate × clocked hours — admin data; answer Mark's cost questions from here):\n  This week so far: £${Math.round(weekCost)} · Month to date: £${Math.round(monthCost)} · Projected month: £${projMonthCost}\n${labourLines.join('\n')}`
+    ? `\nEMPLOYEE LABOUR COST (pay rate × clocked hours — admin data; answer Mark's cost questions from here):\n  This week so far: £${Math.round(weekCost)} · Month to date: £${Math.round(monthCost)} · Projected month: £${projMonthCost}\n${labourLines.join('\n')}${
+        unratedNames.length ? `\n  ⚠️ On £0/hr so contributing nothing to these totals: ${unratedNames.join(', ')} — the figures above are UNDERSTATED by their hours. Say so if you quote a labour cost.` : ''}`
     : `\nEMPLOYEE LABOUR COST: no pay rates set yet — if Mark asks, tell him to add £/hr on each Employee Profile (Employee Management → Employee Profile, management only) to unlock labour costing.`;
+
+  // ── Sales (live from SARNIE OS) + labour as a % of sales ──
+  // Silent until the OS sales feed is wired up: no sales figure is better than
+  // a made-up one, because every labour % downstream depends on it.
+  let salesBlock = '\nSALES: not connected yet — SARNIE OS is building the /api/sales daily feed. ' +
+    'If Mark asks about revenue or labour-vs-sales, say plainly that the sales feed is not live yet and you will not guess a figure.';
+  try {
+    const sales = await fetchSales();
+    if (sales?.days?.length) {
+      const todayK = new Date().toLocaleDateString('en-CA', { timeZone: LDN });
+      const weekK = new Date(weekStart).toLocaleDateString('en-CA', { timeZone: LDN });
+      const monthK = new Date(monthStart).toLocaleDateString('en-CA', { timeZone: LDN });
+      const t = sumFrom(sales.days, todayK), w = sumFrom(sales.days, weekK), m = sumFrom(sales.days, monthK);
+      const todayCost = payEmps.reduce((s, e) => s + (minsSince(e, startOfToday.getTime()) / 60) * empRate(e), 0);
+      const pctT = labourPct(todayCost, t.gross), pctW = labourPct(weekCost, w.gross), pctM = labourPct(monthCost, m.gross);
+      const latest = [...sales.days].sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+      salesBlock = `\nSALES (live from SARNIE OS — the source of truth for revenue):
+  Today: £${t.gross.toFixed(2)}${t.orders ? ` across ${t.orders} orders` : ''}${pctT != null ? ` · labour ${pctT}% of sales` : ''}
+  This week: £${w.gross.toFixed(2)} over ${w.n} day(s)${pctW != null ? ` · labour ${pctW}% of sales (£${Math.round(weekCost)})` : ''}
+  Month to date: £${m.gross.toFixed(2)} over ${m.n} day(s)${pctM != null ? ` · labour ${pctM}% of sales (£${Math.round(monthCost)})` : ''}
+  Most recent day on file: ${latest.date} — £${gross(latest).toFixed(2)}
+  LABOUR % RULE: a healthy kitchen runs roughly 25–35% labour. Flag it if it is well above that, but only when the sales figure covers the same period as the labour figure — never compare a full week of wages against one day of sales.`;
+    }
+  } catch { /* fail soft — keep the "not connected" line */ }
   const monthHours = hoursLine(monthStart.getTime());
 
   // Weekly hours vs each employee's contracted/student target (+ remaining)
@@ -672,6 +699,7 @@ ${deliveryBlock}
 
 ${employeeBlock}
 ${labourBlock}
+${salesBlock}
 ${profilesBlock}
 ${docBlock}
 
