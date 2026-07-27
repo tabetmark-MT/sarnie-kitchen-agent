@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { fetchSales, sumFrom, labourPct, netOf, isTraded, isMissing, isScheduledClosed, countsForAverage, getBaseline, getFeedIssue, getVatRate, exVat, fmtGBP } from './sales.js';
+import { buildOrderingBlock } from './brief.js';
 
 // The agent is a trusted server-side backend, so it reads with the service_role
 // key (bypasses RLS). The DB is now locked down — the public anon key returns
@@ -587,6 +588,12 @@ ${catalogLines}
   SUPPLIER CERTIFICATES (kitchen-held, EHO — flag anything expired or ≤60 days):
 ${certLines.length ? certLines.join('\n') : '  • No supplier certificates on file'}`;
 
+  // ── Ordering & stock (live from SARNIE OS) ──
+  // The catalogue above says WHAT we buy; this says what has to be ordered TODAY and
+  // what runs out first. Time-critical in a way nothing else in this context is: a
+  // missed Lebanos cutoff costs a week, because they deliver once.
+  const orderingBlock = await buildOrderingBlock();
+
   // ── Recent deliveries (last 7 days) ──
   const weekDeliv = deliveries
     .filter(d => new Date(d.date) >= ldnMidnight(7))
@@ -815,6 +822,7 @@ ${fridgeBlock}
 ${probeBlock}
 ${ehoBlock}
 ${supplierBlock}
+${orderingBlock}
 ${deliveryBlock}
 
 ${employeeBlock}
