@@ -50,6 +50,32 @@ server environment — never in the app/browser, never committed to git.
 | `MORNING_HOUR` / `MORNING_MINUTE` | optional | Morning debrief time (default 09:00 Europe/London) |
 | `BACKUP_HOUR` / `BACKUP_MINUTE` | optional | Nightly backup time (default 22:00 Europe/London) |
 
+### SARNIE OS bridges
+
+Four separate reads from the sister inventory app. Every one of them was already in the
+code and documented nowhere, which meant a dead bridge was indistinguishable from a
+working one. Each token also falls back to an `app_settings` row, so a bridge can be
+switched on without a Render deploy — but if a bridge is silently returning nothing, an
+unset token here is the first thing to check.
+
+**Two different secrets.** `/api/sales` and `/api/suppliers` sit behind SARNIE OS's
+`SUPPLIER_FEED_TOKEN`; `/api/intel/*` sits behind its `INTEL_API_TOKEN`. They are not
+interchangeable. Neither is this app's own `INTEL_API_TOKEN`, which guards *our*
+snapshot for Cowork and is ours to rotate independently.
+
+| Variable | Bridge | `app_settings` fallback | If unset |
+|---|---|---|---|
+| `SUPPLIER_FEED_TOKEN` | `/api/suppliers` — catalogue + prices | `sarnie_supplier_feed_token` | supplier/item list is empty |
+| `SALES_TOKEN` | `/api/sales` — revenue (falls back to the feed token) | `sarnie_sales_token` | agent says the sales feed isn't connected |
+| `SARNIE_INTEL_TOKEN` | `/api/intel/brief` — order deadlines + stock cover | `sarnie_intel_token` | agent says the inventory system is unreachable |
+| `AGENT_API_TOKEN` | `/api/agent/chat` — the costing brain | `sarnie_agent_api_token` | every costing question returns *"Costing brain not configured"* |
+
+URLs default to `https://sarnie-inventory-app.vercel.app/...` and only need setting to
+point at a preview deploy: `SUPPLIER_FEED_URL`, `SALES_URL`, `SARNIE_BRIEF_URL`, `AGENT_CHAT_URL`.
+
+Quickest health check without a deploy: **Settings → System Health** in the kitchen app
+lists every bridge green/amber/red.
+
 ---
 
 ## Deploy
