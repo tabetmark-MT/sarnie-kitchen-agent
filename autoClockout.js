@@ -55,13 +55,24 @@ export async function runAutoClockOut(nowMs = Date.now()) {
     if (londonYMD(new Date(e.clockIn)).ymd < EFFECTIVE_FROM) return e; // rule not yet in effect for this shift
     const cutoff = closeCutoff(e.clockIn);
     if (nowMs < cutoff) return e; // not yet 22:00 on that shift's day
-    const mins = Math.max(0, (cutoff - new Date(e.clockIn).getTime()) / 60000);
-    closed.push({ name: nameFor(e), mins, clockIn: e.clockIn, cutoff });
+    // The cutoff must never land BEFORE the clock-in. Someone who clocks in at
+    // 22:32 (after the 22:00 cutoff) would otherwise be stamped with a 22:00
+    // clock-out and stored as a NEGATIVE shift — which is exactly what happened
+    // to one entry on 25 Jul (-32 min). `mins` was clamped for the notification,
+    // so the message read "0m" while the saved record stayed negative and fed
+    // straight into hours and pay.
+    const startMs = new Date(e.clockIn).getTime();
+    const endMs   = Math.max(cutoff, startMs);
+    const mins    = Math.max(0, (endMs - startMs) / 60000);
+    const afterCutoff = startMs > cutoff;
+    closed.push({ name: nameFor(e), mins, clockIn: e.clockIn, cutoff: endMs, afterCutoff });
     return {
       ...e,
-      clockOut: new Date(cutoff).toISOString(),
+      clockOut: new Date(endMs).toISOString(),
       autoClockOut: true,
-      autoNote: 'Forgot to clock out — auto closed at 22:00',
+      autoNote: afterCutoff
+        ? 'Clocked in after the 22:00 cut-off — auto closed at the clock-in time. Needs a manager to set the real hours.'
+        : 'Forgot to clock out — auto closed at 22:00',
     };
   });
 
