@@ -13,14 +13,29 @@ on:
 jobs:
   risk-check:
     runs-on: ubuntu-latest
+    # A 2-second curl should never occupy a runner for long. On 6 Aug 2026 two
+    # runs hung for 15 minutes each before GitHub gave up with "job was not
+    # acquired by Runner of type hosted" - a GitHub capacity problem, not ours.
+    # This caps the damage and stops the 15-minute hang.
+    timeout-minutes: 6
     steps:
       - name: Poll risk watch
         env:
           BACKUP_URL: ${{ secrets.BACKUP_URL }}
         run: |
           url="${BACKUP_URL//\/tasks\/backup\///tasks/risk-check/}"
-          echo "Calling risk-check endpoint (cold start can take ~60s)…"
-          body=$(curl -s --max-time 180 "$url")
-          echo "Response: $body"
-          echo "$body" | grep -qE '"ok":true|"skipped":|"seeded":true' || { echo "::error::Risk check did not respond as expected"; exit 1; }
-          echo "✅ Risk watch ran"
+          # Render's free tier sleeps, so the first call of a quiet period pays a
+          # cold start. Retry rather than fail: a missed poll is harmless (the
+          # endpoint de-dups and gates open hours) but a false alarm email is not.
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt — calling risk-check (cold start can take ~60s)…"
+            body=$(curl -s --max-time 120 "$url" || true)
+            echo "Response: $body"
+            if echo "$body" | grep -qE '"ok":true|"skipped":|"seeded":true'; then
+              echo "✅ Risk watch ran"
+              exit 0
+            fi
+            [ "$attempt" -lt 3 ] && { echo "Unexpected response — retrying in 20s"; sleep 20; }
+          done
+          echo "::error::Risk check did not respond as expected after 3 attempts"
+          exit 1
