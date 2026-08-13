@@ -76,7 +76,16 @@ export async function runAutoClockOut(nowMs = Date.now()) {
     };
   });
 
-  if (closed.length) await upsertSetting('time_entries', next);
+  if (closed.length) {
+    // If this throws, the caller's catch reports it to Telegram rather than
+    // logging into the void — see runAutoClockOutAndNotify in index.js.
+    await upsertSetting('time_entries', next);
+    console.log(`[AutoClockOut] closed ${closed.length} shift(s)`);
+  } else {
+    // Visibility for the opposite failure: shifts left open with nothing said.
+    const stillOpen = entries.filter(e => !e.clockOut).length;
+    if (stillOpen) console.warn(`[AutoClockOut] ${stillOpen} shift(s) still open but none met the cut-off`);
+  }
   return { ok: true, closed };
 }
 

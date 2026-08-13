@@ -100,7 +100,18 @@ export async function getSetting(key) {
   return data?.value;
 }
 export async function upsertSetting(key, value) {
-  await supabase.from('app_settings').upsert([{ key, value, updated_at: new Date().toISOString() }]);
+  // This used to discard the result entirely. On 10-11 Aug the auto clock-out
+  // did not close four open shifts and NOTHING said so: the nightly job still
+  // reported success, and four staff accumulated 53-59 hour shifts that fed
+  // straight into hours, pay and the student-hours alert. A write this
+  // important must never fail quietly.
+  const { error } = await supabase
+    .from('app_settings')
+    .upsert([{ key, value, updated_at: new Date().toISOString() }]);
+  if (error) {
+    console.error(`[Supabase] upsertSetting(${key}) FAILED:`, error.message);
+    throw new Error(`upsertSetting(${key}) failed: ${error.message}`);
+  }
 }
 
 // ── Full database snapshot (for off-site backups) ──────────────────────────
