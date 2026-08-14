@@ -4,7 +4,7 @@
 // CSV doesn't: cleaning completion, fridge temperatures, food-safety logs,
 // probe calibration, allergen review status, deliveries, supplier certs and
 // staff hours — all Europe/London aware.
-import { supabase, getSettings } from './supabase.js';
+import { supabase, getSettings, getTimeEntries } from './supabase.js';
 
 const r1 = (n) => Math.round(n * 10) / 10;
 const londonKey = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Europe/London' }); // YYYY-MM-DD
@@ -175,7 +175,10 @@ export async function buildComplianceSnapshot({ from, to } = {}) {
 
   // ── Employees (this week) ──
   const employees = settings.employees || [];
-  const timeEntries = settings.time_entries || [];
+  // Phase 3: hours come from public.time_entries, not the settings blob.
+  // A day of margin before the week start so a shift that began late the
+  // previous night still counts toward the hours it belongs to.
+  const timeEntries = await getTimeEntries(weekStartMs - 86400000);
   const entryMins = (e, fromMs) => { const s = Math.max(new Date(e.clockIn).getTime(), fromMs); const en = e.clockOut ? new Date(e.clockOut).getTime() : nowMs; return Math.max(0, (en - s) / 60000); };
   let weekMins = 0, overStudent = 0;
   employees.filter(e => e.active !== false).forEach(emp => {

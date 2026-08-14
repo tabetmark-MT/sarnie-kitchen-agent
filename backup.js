@@ -26,8 +26,14 @@ export async function runNightlyBackup({ force = false } = {}) {
   // — as happened 24–25 Jun 2026. Abort WITHOUT uploading and WITHOUT marking
   // the day done, so (a) the last good backup is preserved, (b) it retries, and
   // (c) the failure is surfaced instead of silently saving an empty file.
+  //
+  // time_entries joined this list on 14 Aug 2026, when the hours moved out of
+  // the app_settings blob into their own table. It is the one dataset nobody
+  // can reconstruct — an unbacked-up payroll table that reads empty is the
+  // worst possible silent failure, and the guard is worth more here than on
+  // any of the others.
   const count = (t) => (Array.isArray(data?.[t]) ? data[t].length : 0);
-  const CORE = ['app_users', 'app_settings', 'checklists'];
+  const CORE = ['app_users', 'app_settings', 'checklists', 'time_entries'];
   const emptyCore = CORE.filter((t) => count(t) === 0);
   if (emptyCore.length) {
     return {

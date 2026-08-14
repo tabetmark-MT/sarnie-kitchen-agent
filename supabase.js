@@ -115,8 +115,51 @@ export async function upsertSetting(key, value) {
 }
 
 // ── Full database snapshot (for off-site backups) ──────────────────────────
+// Time entries live in their own table since 14 Aug 2026 (Phase 3 of the
+// migration). Returned in the camelCase shape the callers already speak, so the
+// hour arithmetic around them is untouched. `sinceMs` bounds the read — nothing
+// here ever needs the full history.
+export async function getTimeEntries(sinceMs = null) {
+  let q = supabase
+    .from('time_entries')
+    .select('id,employee_id,employee_name,clock_in,clock_out,auto_clock_out,auto_note')
+    .order('clock_in', { ascending: false });
+  if (sinceMs) q = q.gte('clock_in', new Date(sinceMs).toISOString());
+  const { data, error } = await q;
+  if (error) {
+    console.error('[Supabase] getTimeEntries FAILED:', error.message);
+    throw new Error(`getTimeEntries failed: ${error.message}`);
+  }
+  return (data || []).map((r) => ({
+    id: r.id,
+    employeeId: r.employee_id,
+    employeeName: r.employee_name,
+    clockIn: r.clock_in,
+    clockOut: r.clock_out,
+    autoClockOut: r.auto_clock_out,
+    autoNote: r.auto_note,
+  }));
+}
+
 export async function getAllData() {
-  const tables = ['app_users', 'app_settings', 'checklists', 'completions', 'audit_log'];
+  // `time_entries` was missing from this list until 14 Aug 2026. It was covered
+  // only by accident: the hours lived inside app_settings as a JSON blob, so
+  // backing up app_settings backed up payroll too. Moving them to a real table
+  // would have ended payroll backups silently — the nightly job would have kept
+  // reporting success while the one dataset nobody can reconstruct went
+  // unsaved. Anything added to public schema from here needs a decision on this
+  // line, not an assumption.
+  //
+  // Deliberately excluded:
+  //   employee_pins    — credentials. A PIN in a Dropbox file is a leak vector,
+  //                      and an admin can reset one in seconds; there is nothing
+  //                      to reconstruct.
+  //   auth_throttle    — transient rate-limit state, worthless an hour later.
+  //   backups          — the backup log itself; backing it up is circular.
+  const tables = [
+    'app_users', 'app_settings', 'checklists', 'completions', 'audit_log',
+    'time_entries', 'open_shift_alarm',
+  ];
   const out = {};
   for (const t of tables) {
     const { data, error } = await supabase.from(t).select('*');
@@ -283,11 +326,13 @@ export async function buildKitchenContext() {
 
   // ── Employee Management (clock in/out + hours) ──
   const employees = settings.employees || [];
-  const timeEntries = settings.time_entries || [];
   const nowMs = Date.now();
   const startOfToday = ldnMidnight(0);
   const wd = (new Date(new Date().toLocaleString('en-US', { timeZone: LDN })).getDay() + 6) % 7;
   const weekStart = ldnMidnight(wd); // Monday 00:00 London
+  // A day before the week start, so a shift that began late the previous night
+  // is still counted against the hours it belongs to.
+  const timeEntries = await getTimeEntries(weekStart.getTime() - 86400000);
   const entryMins = (e, fromMs) => {
     const s = Math.max(new Date(e.clockIn).getTime(), fromMs);
     const en = e.clockOut ? new Date(e.clockOut).getTime() : nowMs;
