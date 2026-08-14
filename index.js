@@ -19,11 +19,28 @@ const BACKUP_MINUTE   = process.env.BACKUP_MINUTE  || '0';
 
 app.use(express.json());
 
+// When this process started. Render replaces the process on every deploy, so a
+// bootedAt in the future of your last deploy proves the new code is running.
+const BOOTED_AT = new Date().toISOString();
+
 // ── Health check ──────────────────────────────────────────────────────────
+// `build` used to be the hardcoded string 'live', which meant this endpoint
+// could not tell fresh code from stale — the exact question we needed answered
+// during the 14 Aug cutover and could not. Worse, Render's auto-deploy is off
+// (the service is linked by public Git URL, so push webhooks never arrive), so
+// "did my change actually ship?" is a question that comes up every single time.
+// On 6 Aug the deploy hook was fired before the push and Render ran week-old
+// code unnoticed.
+//
+// RENDER_GIT_COMMIT is set by Render on every build. Comparing it to
+// `git rev-parse --short HEAD` locally answers the question in one look.
 app.get('/', (req, res) => res.json({
   status: 'ok',
   agent: 'Sarnie Kitchen Agent',
   build: 'live',
+  commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || 'local',
+  branch: process.env.RENDER_GIT_BRANCH || 'local',
+  bootedAt: BOOTED_AT,
   features: ['employee-management', 'clocked-in-today', 'weekly-targets', 'kpi-reports', 'compliance-trends', 'probe-calibration', 'document-library', 'auto-clockout'],
   time: new Date().toISOString(),
 }));
