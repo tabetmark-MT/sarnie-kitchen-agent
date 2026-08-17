@@ -166,6 +166,37 @@ export async function getAllData() {
     if (error) console.warn(`[Backup] could not read ${t}:`, error.message);
     out[t] = error ? [] : (data || []);
   }
+  return redactSecrets(out);
+}
+
+// The backup is a 1.8 MB JSON file sitting in Dropbox. Until 17 Aug 2026 it
+// carried every staff login PIN in `app_users.pin` and all six bridge tokens in
+// `app_settings`, in clear. Excluding the `employee_pins` table — which we did
+// deliberately, for exactly this reason — achieved nothing while these two went
+// in through the front door.
+//
+// Anyone with the Dropbox account, a leaked share link, or a stale device could
+// read them out of the file. Nothing in a backup should be usable as a
+// credential.
+//
+// Redacting costs nothing on restore: PINs are reset by an admin in seconds,
+// and the tokens live in Vercel/Render env vars — the app_settings rows are
+// only a fallback. Both are replaced, not lost. The KEYS stay so a restore
+// still shows what existed and needs re-issuing.
+function redactSecrets(out) {
+  const REDACTED = '[REDACTED IN BACKUP]';
+  const isSecretKey = (k) => /token|secret|api[_-]?key|password/i.test(String(k || ''));
+
+  if (Array.isArray(out.app_users)) {
+    out.app_users = out.app_users.map(({ pin, ...rest }) => (
+      pin ? { ...rest, pin: REDACTED } : { ...rest, ...(pin === undefined ? {} : { pin }) }
+    ));
+  }
+  if (Array.isArray(out.app_settings)) {
+    out.app_settings = out.app_settings.map((r) => (
+      isSecretKey(r?.key) ? { ...r, value: REDACTED } : r
+    ));
+  }
   return out;
 }
 
