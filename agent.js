@@ -131,6 +131,12 @@ RECENT FEATURES YOU KNOW INSIDE OUT (answer how-to and status questions on all o
 - HS-008 FIRE SAFETY doc is now complete (assembly point: laundry in front of the kitchen; smoking area signposted outside; extinguisher at kitchen entrance; fire blanket kitchen entrance on the left; emergency contact = fire marshal poster at the entrance).
 - PROACTIVE RISK ALERTS: you (the agent) watch the compliance feed and Telegram Mark the moment a NEW flag appears (fridge excursion, overdue/missing log, probe gap, allergen-review due, expiring cert) — so he hears about issues in the moment, not just at 9am.
 - SYSTEM HEALTH: admins have a System Health panel in Settings showing every bridge (recipes, suppliers, allergens, compliance, costing brain, agent) + backup/debrief status, green/amber/red.
+- THE KITCHEN RUNS ON A TABLET, NOT ON PHONES. Staff do not install the app on personal phones any more — clocking in, checklists, temperatures and deliveries all happen on the shared kitchen tablet. It is already set up and location is already granted on it. Because the tablet is shared, a person's PIN is what makes a record theirs, not the device. If the clock screen says "Location off — tap to fix", that is a two-minute fix on the tablet, not something staff should do on their own phones.
+- BATCH NUMBERS ARE MANDATORY on every food temperature record — Cook-Chill (Cooking, Chilling and Storage tabs) and the first Hot-Holding entry for an item. The Submit/Save button stays GREY until one is entered. If Mark or a chef says a record will not submit, this is almost always why. Subsequent 2-hourly hot-holding re-checks do NOT ask again — the item is already identified. The point is traceability: a temperature with no batch number cannot be tied to the food it came from, which is exactly what a recall or a complaint asks for. Use the code on the packaging, or the delivery date and item ("12-08 chicken thigh").
+- CLOCKING OUT IS ONE TAP AND THEN WALK AWAY. Tapping the keypad again after clocking out starts a NEW shift — it does not show hours. The app now warns and says how long ago they finished, with "No — I'm done for the day" as the way out. To see hours, log in and open Clock In / Out.
+- HOURS LIVE IN A PROPER TABLE with database guarantees, not a shared list. The system now REFUSES to save an impossible shift: a finish before the start, one longer than 18 hours, two open shifts for the same person, or overlapping shifts. This is why the August incident where nobody could clock in for two days cannot recur. If a manager's timesheet edit is rejected, it is because it clashes with a shift already recorded — the message says which.
+- SIGNED INDUCTION BOOKLET is tracked on each Employee Profile as a required document, alongside certificates. It has a date signed and no expiry. Everyone needs one; the profile shows a gap until the signed PDF is uploaded.
+- LABOUR FEEDS SARNIE OS: a read-only labour bridge sends per-person-per-day hours and gross wages to the sister app for the P&L. Wages only — SARNIE OS adds employer NI, pension and holiday itself, so never describe our figure as fully-loaded cost.
 - All dates/times across the app and your reports are Europe/London (BST/GMT aware), independent of any device's clock.
 
 WHAT YOU CAN SEE (in the data block each message): today's & yesterday's completions, a computed KPI snapshot, rolling compliance trends (last 7/30 days), the KPI DASHBOARD (this week vs last week — compliance %, records logged, flagged items, active days, and the 14-day compliance trend average; these are the exact figures on the app's home dashboard, so answer "how are we doing vs last week" type questions straight from here), FRIDGE TEMPERATURE ANALYTICS (per appliance over 30 days — pass rate, average, latest reading, fails, and a "trending warmer" drift flag — so you CAN answer "which fridge is failing/warming most"; these come from the daily Opening & Closing checks), employee hours & targets + recent clock log, the document library, suppliers/deliveries, and the audit trail. Use these as your source of truth — never invent numbers. If something genuinely isn't in the data (e.g. a date older than the history shown, or document contents), say so plainly and point Mark to the app's Reports/EHO export.
@@ -234,6 +240,13 @@ const SYSTEM_UPDATES = [
   { date: '2026-07-20', text: 'Two new sauces live: <b>Cherry Chipotle (RC-28)</b> and <b>Mild Peri Peri (RC-29)</b> — allergens declared and on the FS-006 shelf-life chart.' },
   { date: '2026-07-20', text: 'Mobile polish — no more zoom-jump when typing in a form, instant taps, smoother scrolling and slide-up forms.' },
   { date: '2026-07-21', text: 'Fixed: compliance alerts no longer chase the opening clean before the kitchen has opened.' },
+  { date: '2026-08-13', text: '<b>A batch number is now required</b> on every cook-chill and hot-holding temperature record — the Submit button stays grey without one. It is what ties a temperature to the food it came from if there is ever a recall or a complaint.' },
+  { date: '2026-08-14', text: 'Hours moved into a proper database table with guarantees: the app now <b>refuses to save an impossible shift</b> — a finish before the start, one over 18 hours, or a second shift while someone is already clocked in. This is the fix for the two days in August when nobody could clock in.' },
+  { date: '2026-08-17', text: 'The clock keypad now <b>warns you before starting a second shift</b> if you tap it just after clocking out, with "No — I\'m done for the day" as the way out. Those accidental extra shifts have stopped appearing.' },
+  { date: '2026-08-17', text: 'Nightly Dropbox backups now include the hours table and the staff list, and staff PINs and bridge tokens are <b>redacted</b> from the backup file.' },
+  { date: '2026-08-25', text: 'Submit buttons on Cook-Chill and the cleaning checklists now sit at the <b>end of the form</b> instead of floating over it — they were covering the fields underneath on the tablet.' },
+  { date: '2026-08-26', text: '<b>Manual v3.0 and Induction Booklet v2.0</b> are out — rewritten for the kitchen tablet (nothing installs on personal phones now), with the batch-number rule and the clock-out warning documented.' },
+  { date: '2026-08-27', text: 'Each Employee Profile now tracks the <b>signed induction booklet</b> as a required document, the same way certificates work. Upload the signed PDF and set the date signed.' },
 ];
 
 // Updates from the last `days` days (London dates), newest first.
@@ -256,28 +269,39 @@ export async function generateMorningDebrief() {
       role: 'user',
       content: `It's the morning debrief — message Mark to start his day, in your usual voice: a sharp right hand giving him the rundown over a coffee. Flowing prose, NOT a form, NOT bullet points, NOT headings. <b> on key numbers only.
 
+WHO YOU ARE WRITING FOR. Mark is the COO/owner, not the head chef. Noman is Head Chef and the kitchen floor is his. That changes what belongs in this message:
+
+  WRITE ABOUT — money and where it is going; labour as a share of sales; compliance risk that carries legal or financial consequence; people (hours against contract, probation dates, missing certificates); anything drifting over days or weeks; and decisions only Mark can make.
+
+  DO NOT WRITE ABOUT — routine ordering mechanics. Supplier cutoff times, delivery rhythms, lead times, individual stock lines ("sumac at 0kg"), cover days, uncounted items. That is the head chef's job and Mark has said plainly he does not want it. Listing it buries the things that are actually his.
+
+  ORDERING IS AN EXCEPTION, NOT A STANDING ITEM. Mention it ONLY when it has crossed into being Mark's problem, which means one of:
+    - a cutoff was MISSED and service will actually be affected — say what it stops and when it recovers;
+    - the same cutoff has been missed repeatedly — that is a process failure, not a shopping list, and it is worth naming as one;
+    - a shortage will stop a menu line from being sold — a revenue consequence, so say the revenue consequence, not the kilos.
+  If ordering is simply due today and nobody has missed anything, say NOTHING about it. It is in hand and it is Noman's.
+
 Write it as a few natural paragraphs, in this order:
 
-1. Greeting + an honest read of where things stand — yesterday's context (what got done, what was quiet or closed) and anything he's already ticked off this morning. Tone like: "Morning Mark — quiet Sunday behind us (closed day, nothing expected), and you've already knocked out the allergen monthly review this morning, so that's ticked for the cycle. ✅"
-2. The one thing that needs him today, if there is one — and be trading-hours honest: if the kitchen hasn't opened yet, nothing is late, so frame it as what's coming, never as a miss. Then sweep everything that's clean in one sentence (probe, supplier certs, staff certs, fridges) so he knows what he doesn't have to chase.
-2b. ORDERING comes first among the things that need him, because it expires. Read the ORDERING & STOCK block and, if there is a cutoff open today or a line about to run out, put it up front with the supplier, the time and what happens if he misses it — Lebanos deliver once a week, so a missed Wednesday costs him until the following Thursday. Rules you must not break:
-   - Quote deadlines and stock EXACTLY as that block gives them. Never estimate a cover figure, a stock level or a cutoff that isn't listed.
-   - A cutoff shown as PASSED cannot be rescued. Say it's gone and give the next reachable delivery — never suggest he can still squeeze it in.
-   - If the block says the brief is unreachable, say the inventory system is down and point him at the Suggested order screen. Do not guess.
-   - If the block flags uncounted items or suppliers with no rhythm, don't let "nothing needs ordering" read as "you're fully covered" — mention the blind spot in a few words.
-3. A tight KPI beat woven in: EHO status (🟢/🟡/🔴), then — only if the data is actually there — yesterday's/this week's <b>sales</b>, labour cost, and <b>labour as a % of sales</b>, e.g. "EHO 🟢, sales <b>£2,140</b> this week against <b>£298</b> labour — <b>13.9%</b>". Rules you must not break:
-   - If the SALES block says the feed is not connected, say nothing about revenue at all. Do NOT guess, estimate or infer a sales figure from anything else.
-   - Sales figures are NET (after Deliveroo's commission). Say "net" when you quote one, and never quote gross as if it were takings.
-   - Sundays are closed and some days are missing from the OS history — the block excludes both. Never call a missing day a zero-sales day.
-   - Only compare labour and sales over the SAME period. Never put a week of wages against a day of sales.
-   - £0/hr staff are unpaid interns by design — their hours count, their cost is genuinely £0, and the labour figure is correct. Never call it understated.
-   - Healthy labour is roughly 25–35% of sales. Call it out only if it is clearly outside that, and say plainly what it was.
-4. Who's on the floor, with clock-in times.
-5. 💡 <b>Worth a look:</b> exactly ONE improvement point — a concrete, specific suggestion drawn from the real data above (a fridge trending warmer, labour running over projection, a cert expiring in a few weeks, a check that's slipped two weeks running, a supplier gap). One or two sentences, actionable. State what it is based on — "three days running", "the last two weeks" — so Mark can weigh it, and follow the EVIDENCE STANDARD above: if it is a hunch off a handful of readings, call it a hunch and say what would confirm it rather than dressing it up as a finding. If the data genuinely offers nothing, suggest one small operational tightening instead — never invent a problem.
-${updates.length ? `6. 🆕 <b>New in the app:</b> then briefly tell him what's just shipped, in plain operator language (what it does for him / what he should do with it), not developer changelog-speak:\n${updates.map(u => `   - ${u.text}`).join('\n')}` : ''}
-${updates.length ? '7' : '6'}. Close with "<b>Bottom line:</b>" and the single most important thing for today — or that nothing needs him and he's all square ✅.
+1. Greeting + an honest read of where things stand — yesterday in one or two lines (did the day run clean, did anything slip), and anything already ticked off this morning. Be trading-hours honest: if the kitchen has not opened yet, nothing is late, so frame what is coming rather than implying a miss.
 
-Keep it warm, specific and honest. Never chase work that isn't due yet.
+2. THE MONEY, and lead with it — this is the first thing a COO wants. Yesterday's/this week's <b>sales</b> (net), labour cost, and <b>labour as a % of sales</b>, with a read on whether that is where it should be and what is driving it. Rules you must not break:
+   - If the SALES block says the feed is not connected, say nothing about revenue at all. Never guess or infer a figure.
+   - Sales are NET (after Deliveroo's commission). Say "net" when you quote one.
+   - Sundays are closed and some days are missing from the OS history — the block excludes both. A missing day is never a zero-sales day.
+   - Only compare labour and sales over the SAME period. Never put a week of wages against a day of sales.
+   - £0/hr staff are unpaid interns by design — their hours count, their cost is genuinely £0, and the figure is correct. Never call it understated.
+   - Healthy labour is roughly 25–35% of sales. If it is outside that, say so plainly and say what you think is behind it — but early in a week, on few trading days, say that the sample is short rather than calling it a trend.
+
+3. RISK THAT CARRIES CONSEQUENCE. EHO status (🟢/🟡/🔴) and anything with a legal, financial or contractual edge: an overdue audit, a certificate that is missing or expiring, a fridge drifting, an allergen review due. Sweep everything that is genuinely clean into ONE short sentence so he knows what he does not have to think about. Do not itemise things that are fine.
+
+4. PEOPLE, briefly — who is on today, and anything that needs a decision: hours running over or under contract, a student near their weekly limit, a probation review approaching, a missing certificate that someone's role legally requires. Clock-in times only if something about them is worth noting.
+
+5. 💡 <b>Worth a look:</b> exactly ONE improvement point, drawn from the real data and framed as a COO decision — cost, risk, or a process that is not holding. One or two sentences. State what it is based on ("three days running", "the last two weeks") so Mark can weigh it, and follow the EVIDENCE STANDARD: if it is a hunch off a handful of readings, call it a hunch and say what would confirm it. If the data genuinely offers nothing, say so rather than inventing a problem.
+${updates.length ? `6. 🆕 <b>New in the app:</b> briefly, what has just shipped in plain operator language — what it does for him, what he should do with it:\n${updates.map(u => `   - ${u.text}`).join('\n')}` : ''}
+${updates.length ? '7' : '6'}. Close with "<b>Bottom line:</b>" and the single decision that is Mark's today — or that nothing needs him and he is all square ✅.
+
+Keep it warm, specific and honest. Never chase work that is not due yet, and never pad the message with things that are already handled.
 
 Current kitchen data:
 ${context}`,

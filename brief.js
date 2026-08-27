@@ -90,5 +90,14 @@ ${caveats.join('\n')}
   RULES: these deadlines are London time and already account for lead time and the days each
   supplier accepts orders. A PASSED cutoff cannot be rescued — say so plainly and give the next
   reachable date rather than implying he can still squeeze it in. Never invent a stock figure,
-  a cover estimate or a deadline that is not listed above.`.trimEnd();
+  a cover estimate or a deadline that is not listed above.
+
+  WHO THIS IS FOR. Ordering and stock belong to Noman, the Head Chef — not to Mark. In the MORNING
+  DEBRIEF do not list cutoffs, lead times, cover days or individual stock lines: Mark has said
+  plainly he does not want them, and listing them buries the things that are actually his. Raise
+  ordering there ONLY when it has become a COO problem — a missed cutoff that will actually stop
+  service, the same cutoff missed repeatedly (a process failure worth naming), or a shortage that
+  will stop a menu line being sold, in which case give the revenue consequence rather than the kilos.
+  If Mark ASKS about stock or ordering directly, answer him fully from this block — the restraint is
+  about what you volunteer at 10am, not about withholding an answer.`.trimEnd();
 }
