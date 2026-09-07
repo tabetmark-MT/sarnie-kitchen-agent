@@ -361,9 +361,19 @@ export async function buildKitchenContext() {
   const startOfToday = ldnMidnight(0);
   const wd = (new Date(new Date().toLocaleString('en-US', { timeZone: LDN })).getDay() + 6) % 7;
   const weekStart = ldnMidnight(wd); // Monday 00:00 London
-  // A day before the week start, so a shift that began late the previous night
-  // is still counted against the hours it belongs to.
-  const timeEntries = await getTimeEntries(weekStart.getTime() - 86400000);
+  // The window has to cover every period this file then reports on, not just
+  // "this week". It used to start a day before the week start, which meant that
+  // on a MONDAY MORNING the agent held almost nothing — Sunday is closed and
+  // nobody had clocked in yet — so it told Mark "no shifts recorded at all" and
+  // reported £0 for this week, month-to-date AND projected, on a month with 168
+  // hours already in it. Month-to-date was being summed over data that had never
+  // been fetched. Cover the calendar month, the previous two weeks (so "last
+  // week" is answerable), and the usual day of slack for an overnight shift.
+  const monthStartMs = ldnMidnight(
+    Number(new Date().toLocaleDateString('en-CA', { timeZone: LDN }).slice(8, 10)) - 1,
+  ).getTime();
+  const historyFromMs = Math.min(monthStartMs, weekStart.getTime() - 14 * 86400000) - 86400000;
+  const timeEntries = await getTimeEntries(historyFromMs);
   const entryMins = (e, fromMs) => {
     const s = Math.max(new Date(e.clockIn).getTime(), fromMs);
     const en = e.clockOut ? new Date(e.clockOut).getTime() : nowMs;
@@ -384,7 +394,7 @@ export async function buildKitchenContext() {
       return mins > 0 ? `  • ${emp.name}: ${fmtH(mins)}` : null;
     })
     .filter(Boolean);
-  const monthStart = ldnMidnight(Number(new Date().toLocaleDateString('en-CA', { timeZone: LDN }).slice(8, 10)) - 1); // 1st 00:00 London
+  const monthStart = new Date(monthStartMs); // 1st 00:00 London (computed above, with the fetch window)
   const todayHours = hoursLine(startOfToday.getTime());
   const weekHours = hoursLine(weekStart.getTime());
 
@@ -617,7 +627,13 @@ ${recentShifts.length ? recentShifts.join('\n') : '  • No shifts recorded'}`;
     const started = emp.startDate ? `, started ${new Date(emp.startDate).toLocaleDateString('en-GB', { timeZone: 'Europe/London' })}` : '';
     const certs = (emp.certs || []);
     const certStr = certs.length ? certs.map(certLine).join('; ') : 'none on file';
-    const pin = emp.pin ? 'clock-in PIN set' : 'no clock-in PIN';
+    // Clock-in PINs live in the protected employee_pins table, never in this
+    // blob — that was deliberate, so a staff session cannot read them. `emp.pin`
+    // has therefore been undefined for everyone since the move, and this line
+    // told Mark "no clock-in PIN" for all six staff who DO have one, which then
+    // framed a whole answer around a clock system that was working fine.
+    // `pinSet` is the flag the app writes for exactly this purpose.
+    const pin = (emp.pinSet || emp.pin) ? 'clock-in PIN set' : 'no clock-in PIN';
     return `  • ${emp.name} — ${emp.role || 'Staff'}, ${type}${started}. ${pin}. Certificates: ${certStr}`;
   };
   const activeEmps = employees.filter(e => e.active !== false);
