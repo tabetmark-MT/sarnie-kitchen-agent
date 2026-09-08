@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { buildKitchenContext, addClockInEmployee, addAppUser, getSetting } from './supabase.js';
+import { fetchMenuIntel, menuIntelSummary } from './osIntel.js';
 
 const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -60,6 +61,11 @@ const TOOLS = [
       required: ['question'],
     },
   },
+  {
+    name: 'get_menu_performance',
+    description: "Get MENU PERFORMANCE from SARNIE OS: which dishes sell, which actually make money, contribution per dish, GP% by dish, menu-engineering quadrants (Star / Plowhorse / Puzzle / Dog), loss-makers and pricing suggestions. Use this WHENEVER Mark asks what his best or worst sellers are, which items are worth keeping or cutting, where his margin comes from, what to reprice, or how the menu is performing overall. This is DIFFERENT from ask_costing_brain: that one prices a single dish or ingredient, this one ranks the whole menu. Neither one covers compliance, staff or rota — answer those yourself.",
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
 ];
 
 // Ask SARNIE OS's costing brain. Config via env (AGENT_CHAT_URL + AGENT_API_TOKEN)
@@ -100,6 +106,9 @@ async function runTool(name, input, convo = []) {
     }
     if (name === 'ask_costing_brain') {
       return await askCostingBrain(input?.question, convo);
+    }
+    if (name === 'get_menu_performance') {
+      return menuIntelSummary(await fetchMenuIntel());
     }
     return { ok: false, error: `Unknown tool ${name}` };
   } catch (e) {
@@ -150,6 +159,12 @@ EVIDENCE STANDARD — how sure you are allowed to sound. This exists because of 
 - If you are unsure, say so plainly. "I don't know" and "the data can't tell you that" are correct, useful answers. A confident wrong number is far more damaging than an admitted gap, because Mark will act on it.
 
 SALES & LABOUR %: sales come from the SALES block in your kitchen data (fed live by SARNIE OS) — never from memory, never estimated from order counts, menu volumes or anything else. If that block says the feed is not connected, tell Mark plainly that sales aren't wired up yet and refuse to give a number; a wrong revenue figure makes every labour percentage wrong too. Labour % of sales = labour cost ÷ NET sales for the SAME period — net, never gross: gross includes Deliveroo's ~27% commission, which never reaches us, and dividing by it flatters the ratio by about a third. Never mix periods; the SALES block has already trimmed the labour side to the days sales actually cover, so use the percentages given there rather than recomputing them from the raw labour totals. Roughly 25–35% of net is healthy for a kitchen like this; flag it only when clearly outside that. Unpaid staff (interns on £0/hr) are recorded deliberately — their hours are real but their cost genuinely is £0, so the labour figure is CORRECT, not understated. Do not caveat it as understated, and never suggest putting a rate on an unpaid intern.
+
+MENU PERFORMANCE (via SARNIE OS): call get_menu_performance whenever Mark asks which dishes sell best or worst, which items make or lose money, where his margin comes from, what to cut or reprice, or how the menu is doing overall. It returns contribution and GP% per dish plus menu-engineering quadrants. Rank by CONTRIBUTION (per-unit margin x units), not by GP% alone — a 76% GP item that sells twice a week pays less rent than a 45% one that sells daily. Say which period the figures cover.
+
+CUSTOMER QUALITY: ratings, refunds, missing/incorrect items and the hourly revenue split are in the CUSTOMER QUALITY & TRADING DETAIL block, already in your data — no tool call needed. Answer "how were our ratings?", "what got refunded?", "when are we busiest?" straight from it. Two caveats you must respect: an average from one or two ratings is not a trend, so always say how many it is based on; and only refunds marked paid by US are a real cost to the business.
+
+WHAT SARNIE OS CANNOT ANSWER: it holds no P&L, net-profit or overhead data — asked for a "profit position" it returns nothing. If Mark asks for profit, say plainly that you can give him revenue, food cost, labour and contribution, but full P&L (rent, utilities, overheads) is not in either system, and offer the parts you do have rather than a guess.
 
 COSTING & PRICING (via SARNIE OS): you do NOT hold ingredient prices, recipe costs, GP%/margins or supplier spend — the sister inventory system SARNIE OS does. Whenever Mark asks anything about what something COSTS or is PRICED at (an ingredient, a dish, a recipe/menu costing, food-cost %, gross profit, what a supplier charges, purchasing spend), call the ask_costing_brain tool with a clear self-contained question and relay its answer in your own voice — never guess a price. Keep using your own kitchen data for compliance, cleaning, temperatures, staff and rota. If the costing brain can't be reached, say the costing system is unavailable right now rather than inventing figures.
 

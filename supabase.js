@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { fetchSales, sumFrom, labourPct, netOf, isTraded, isMissing, isScheduledClosed, countsForAverage, getBaseline, getFeedIssue, getVatRate, exVat, fmtGBP } from './sales.js';
+import { fetchTrading, tradingQualityBlock } from './osIntel.js';
 import { buildOrderingBlock } from './brief.js';
 
 // The agent is a trusted server-side backend, so it reads with the service_role
@@ -448,6 +449,10 @@ export async function buildKitchenContext() {
   // ── Sales (live from SARNIE OS) + labour as a % of sales ──
   // Silent until the OS sales feed is wired up: no sales figure is better than
   // a made-up one, because every labour % downstream depends on it.
+  // Customer quality (ratings, refunds, missing items) and the hourly split
+  // live ONLY in SARNIE OS's trading feed — the costing brain cannot see them,
+  // and asked about ratings it reports 0 stars while real ratings exist.
+  const qualityBlock = tradingQualityBlock(await fetchTrading().catch(() => null));
   let salesBlock = '\nSALES: not connected yet — SARNIE OS is building the /api/sales daily feed. ' +
     'If Mark asks about revenue or labour-vs-sales, say plainly that the sales feed is not live yet and you will not guess a figure.';
   try {
@@ -938,6 +943,7 @@ ${deliveryBlock}
 ${employeeBlock}
 ${labourBlock}
 ${salesBlock}
+${qualityBlock}
 ${profilesBlock}
 ${docBlock}
 
