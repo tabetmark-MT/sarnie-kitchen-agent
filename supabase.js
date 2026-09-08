@@ -499,9 +499,16 @@ export async function buildKitchenContext() {
       // commission is a cost of sale, not a reduction in turnover, so it does
       // NOT come off this denominator. Derived from orderValue, the one revenue
       // field reconciled to Deliveroo's own remittance statement.
-      const exT = exVat(t.orderValue, vatRate);
-      const exW = exVat(w.orderValue, vatRate);
-      const exM = exVat(m.orderValue, vatRate);
+      // orderValue is the sum of the feed's `gross`, which SARNIE OS documents
+      // as ALREADY EX-VAT: "Post-offer order value — the figure Deliveroo
+      // charges commission on. Ex-VAT. Deliveroo's Hub calls this NET SALES."
+      // Dividing it by 1.20 again understated turnover by 16.7% and inflated
+      // every labour percentage: on 7 Sep 2026 it reported £826.45 against the
+      // Hub's £991.70 and called labour 38.4% "a few points hot", when the real
+      // figure was 32.0% — inside the 25-35% band. No second deduction.
+      const exT = t.orderValue;
+      const exW = w.orderValue;
+      const exM = m.orderValue;
       const pctT = alignedToday != null ? labourPct(alignedToday, exT) : null;
       const pctW = alignedWeek  != null ? labourPct(alignedWeek,  exW) : null;
       const pctM = alignedMonth != null ? labourPct(alignedMonth, exM) : null;
@@ -525,11 +532,11 @@ export async function buildKitchenContext() {
   ${feedIssue}
   You must NOT give Mark a net sales figure or any labour-vs-sales percentage until this is resolved. If he asks, explain the problem in one line and say the number would be wrong. Order counts and the fact that a day traded are still reliable, so you may use those.
   Most recent day on file: ${latest ? latest.date : 'unknown'} (${latest ? `${latest.orders} orders` : 'n/a'}).`
-        : `\nSALES (live from SARNIE OS — the source of truth for revenue). Labour % is measured against TURNOVER EX-VAT (Deliveroo's Total Order Value ÷ ${(1 + vatRate).toFixed(2)}), which is standard restaurant practice and what the 25-35% benchmark means${lagNote}.${baseNote}
+        : `\nSALES (live from SARNIE OS — the source of truth for revenue). Labour % is measured against TURNOVER EX-VAT — the feed's order value, which SARNIE OS already reports ex-VAT (it is Deliveroo Hub's NET SALES). Do not deduct VAT from it again${lagNote}.${baseNote}
   ${todayLine}
-  This week: turnover ex-VAT ${fmtGBP(exW)} (order value ${fmtGBP(w.orderValue)} inc VAT) over ${w.tradingDays} trading day(s)${gaps(w)}${pctW != null ? ` · labour ${pctW}% of ex-VAT turnover (£${Math.round(alignedWeek)})` : ''}
-  Month to date: turnover ex-VAT ${fmtGBP(exM)} (order value ${fmtGBP(m.orderValue)} inc VAT) over ${m.tradingDays} trading day(s)${gaps(m)}${pctM != null ? ` · labour ${pctM}% of ex-VAT turnover (£${Math.round(alignedMonth)})` : ''}
-  Most recent trading day on file: ${latest ? `${latest.date} — order value ${fmtGBP(Number(latest.gross) || 0)} inc VAT (${fmtGBP(exVat(Number(latest.gross) || 0, vatRate))} ex-VAT)` : 'none'}
+  This week: turnover ex-VAT ${fmtGBP(exW)} (matches Deliveroo Hub NET SALES) over ${w.tradingDays} trading day(s)${gaps(w)}${pctW != null ? ` · labour ${pctW}% of ex-VAT turnover (£${Math.round(alignedWeek)})` : ''}
+  Month to date: turnover ex-VAT ${fmtGBP(exM)} (matches Deliveroo Hub NET SALES) over ${m.tradingDays} trading day(s)${gaps(m)}${pctM != null ? ` · labour ${pctM}% of ex-VAT turnover (£${Math.round(alignedMonth)})` : ''}
+  Most recent trading day on file: ${latest ? `${latest.date} — turnover ex-VAT ${fmtGBP(Number(latest.gross) || 0)} (this is the figure Deliveroo Hub shows as NET SALES)` : 'none'}
   ${m.estimated ? 'Note: at least one day had no commission figure, so 27% was assumed — treat as slightly approximate.\n  ' : ''}RULES YOU MUST FOLLOW:
   • Sundays are scheduled-closed — labour ÷ sales is undefined, not zero. Never average them in. If one ever DOES take money it still counts as revenue.
   • A trading day with no data is a GAP in the OS history, not a zero-sales day. Never describe one as "no sales".
