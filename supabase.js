@@ -157,15 +157,52 @@ export async function getAllData() {
   //                      to reconstruct.
   //   auth_throttle    — transient rate-limit state, worthless an hour later.
   //   backups          — the backup log itself; backing it up is circular.
+  // PostgREST caps an unbounded select at 1000 rows and says nothing about it.
+  // Discovered 9 Sep 2026: every nightly backup held exactly 1000 audit_log rows
+  // while the table had 1747 — 747 compliance events silently absent from the
+  // off-site copy, and completions (757 and climbing ~15/day) was weeks away
+  // from doing the same to food-safety records. The empty-read guard below
+  // catches a table that reads as ZERO; it cannot see a table that reads as
+  // TRUNCATED, which looks like a perfectly healthy backup.
+  //
+  // Page through with an explicit ORDER BY (unordered pagination can repeat or
+  // skip rows across pages) and then verify each table against a server-side
+  // COUNT. A short read now ABORTS the backup rather than writing a file that
+  // looks complete and is not.
+  const PK = {
+    app_settings: 'key',
+    open_shift_alarm: 'detected_at',
+  };
+  const PAGE = 1000;
   const tables = [
     'app_users', 'app_settings', 'checklists', 'completions', 'audit_log',
     'time_entries', 'open_shift_alarm',
   ];
   const out = {};
+  const short = [];
   for (const t of tables) {
-    const { data, error } = await supabase.from(t).select('*');
-    if (error) console.warn(`[Backup] could not read ${t}:`, error.message);
-    out[t] = error ? [] : (data || []);
+    const orderBy = PK[t] || 'id';
+    const rows = [];
+    let failed = false;
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from(t).select('*').order(orderBy, { ascending: true }).range(from, from + PAGE - 1);
+      if (error) { console.warn(`[Backup] could not read ${t}:`, error.message); failed = true; break; }
+      rows.push(...(data || []));
+      if (!data || data.length < PAGE) break;
+    }
+    out[t] = failed ? [] : rows;
+    if (!failed) {
+      const { count, error: cErr } = await supabase.from(t).select('*', { count: 'exact', head: true });
+      if (!cErr && typeof count === 'number' && rows.length < count) {
+        short.push(`${t} (${rows.length}/${count})`);
+      }
+    }
+  }
+  if (short.length) {
+    const e = new Error(`backup ABORTED — short read on ${short.join(', ')}. Refusing to write a truncated backup.`);
+    e.shortRead = short;
+    throw e;
   }
   return redactSecrets(out);
 }
