@@ -3,6 +3,7 @@ import cron    from 'node-cron';
 import { sendMessage, sendChatAction, setWebhook, parseUpdate } from './telegram.js';
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
 import { runNightlyBackup, formatBackupResult } from './backup.js';
+import { runInAppSnapshot, formatSnapshotResult } from './snapshot.js';
 import { runAutoClockOut, formatAutoClockOut } from './autoClockout.js';
 import { supabase, getSetting, upsertSetting, getComplianceSnapshot } from './supabase.js';
 import { authorisedIntel, buildComplianceSnapshot } from './intel.js';
@@ -63,9 +64,28 @@ async function runAutoClockOutAndNotify() {
   }
 }
 
+// The app's own restore-point history (`public.backups`). Runs here rather than
+// in the browser — see snapshot.js. Never allowed to break the Dropbox backup:
+// that one is the disaster-recovery copy and takes priority.
+async function runSnapshotAndNotify() {
+  try {
+    const result = await runInAppSnapshot();
+    const msg = formatSnapshotResult(result);
+    if (msg) console.log('[Snapshot]', result.counts);
+    return result;
+  } catch (err) {
+    console.error('[Snapshot] failed:', err.message);
+    await sendMessage(OWNER_CHAT_ID,
+      `⚠️ <b>In-app restore point failed</b>\n\n${err.message}\n\n`
+      + `<b>The off-site Dropbox backup is separate and unaffected.</b>`);
+    return { ok: false, error: err.message };
+  }
+}
+
 async function triggerBackup(res) {
   try {
     await runAutoClockOutAndNotify(); // forgot-to-clock-out check rides the nightly trigger
+    await runSnapshotAndNotify();     // in-app restore point, before the off-site copy
     const result = await runNightlyBackup();
     // Stay silent when another scheduler already backed up today (de-dup), and
     // when Dropbox simply isn't configured yet. Only notify on a real backup/error.
@@ -178,12 +198,15 @@ async function runBackupWatch() {
   const when = latest
     ? new Date(latest.created_at).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' })
     : 'never';
+  // Since 22 Sep 2026 this snapshot is written HERE, by the nightly job — not by
+  // a browser. So "stale" no longer means "nobody signed in"; it means my own
+  // job did not run or could not write, which is a fault on this side.
   const msg = stale
-    ? `⚠️ <b>In-app backup has not run</b>\n\nLast snapshot inside the app: <b>${when}</b> (${Math.floor(ageH)}h ago).\n\n`
-      + `It only runs when someone has the app open and signed in, so this usually means nobody signed in — or the session had expired at 23:00.\n\n`
-      + `<b>Your off-site Dropbox backup is separate and unaffected.</b> Nothing is lost; this copy is the convenience one.`
-    : `⚠️ <b>In-app backup is incomplete</b>\n\nThe snapshot from ${when} saved only part of the audit log `
-      + `(it was taken by someone without permission to read it).\n\n<b>The off-site Dropbox backup is unaffected.</b>`;
+    ? `⚠️ <b>Restore point has not been saved</b>\n\nLast one: <b>${when}</b> (${Math.floor(ageH)}h ago).\n\n`
+      + `This is written by me on the nightly run, so this means that job did not run or could not write — worth a look at the agent.\n\n`
+      + `<b>Your off-site Dropbox backup is separate and unaffected.</b> Nothing is lost; this copy is the in-app one.`
+    : `⚠️ <b>Restore point is incomplete</b>\n\nThe snapshot from ${when} saved only part of the audit log — `
+      + `that means it came from a browser rather than the nightly job.\n\n<b>The off-site Dropbox backup is unaffected.</b>`;
 
   await sendMessage(OWNER_CHAT_ID, msg);
   await upsertSetting('last_backup_watch', state);
@@ -352,6 +375,7 @@ cron.schedule(`${BACKUP_MINUTE} ${BACKUP_HOUR} * * *`, async () => {
   console.log('[Cron] Running nightly auto clock-out + Dropbox backup...');
   try {
     await runAutoClockOutAndNotify(); // close anyone who forgot to clock out at 22:00
+    await runSnapshotAndNotify();     // in-app restore point, before the off-site copy
     const result = await runNightlyBackup();
     console.log('[Cron] Backup:', result.skipped ? '↩︎ already done today' : result.ok ? `✅ ${result.path}` : `⚠️ ${result.reason}`);
     // Stay silent if already done today (another scheduler) or not configured.
