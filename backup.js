@@ -1,4 +1,4 @@
-import { getAllData, getSetting, upsertSetting } from './supabase.js';
+import { getAllData, getSetting, upsertSetting, markRun } from './supabase.js';
 import { uploadToDropbox, dropboxConfigured } from './dropbox.js';
 
 const londonDate = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }); // YYYY-MM-DD
@@ -67,6 +67,7 @@ export async function runNightlyBackup({ force = false } = {}) {
   const counts = Object.fromEntries(
     Object.entries(data).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0])
   );
+  await markRun('backup');
   return { ok: true, path, sizeKB: Math.round(json.length / 1024), counts };
 }
 

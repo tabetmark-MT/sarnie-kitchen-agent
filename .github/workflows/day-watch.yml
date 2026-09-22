@@ -1,0 +1,45 @@
+name: Day Watch
+
+# ONE workflow for every time-of-day check, rather than one per watcher.
+#
+# The repo pattern is module + cron + endpoint + workflow per job. Followed
+# literally for the compliance watchdog and the clock-out nudge that would have
+# been six new moving parts and two GitHub schedules, for two checks that run
+# during the same trading day. They share this pull instead; each decides for
+# itself whether it is inside its own window, so the next one is a function call
+# rather than another file.
+#
+# 10:00-21:00 UTC covers 11:00-22:00 London in BST and 10:00-21:00 in GMT.
+# GitHub cron does not follow DST, so the endpoint gates the real windows and
+# the extra pings at the edges are no-ops.
+#
+# :44 not :00 — the clock-out nudge has to land before the 22:10 auto-close, and
+# 21:44 UTC is 22:44 BST which is too late. See the second schedule.
+on:
+  schedule:
+    - cron: '5 10-21 * * *'     # hourly compliance sweep
+    - cron: '45 20,21 * * *'    # 21:45 London in BST and GMT — clock-out nudge
+  workflow_dispatch: {}
+
+jobs:
+  day-watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Poll day watch
+        env:
+          BACKUP_URL: ${{ secrets.BACKUP_URL }}
+        run: |
+          url="${BACKUP_URL//\/tasks\/backup\///tasks/day-watch/}"
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt — calling day-watch (cold start can take ~60s)…"
+            body=$(curl -s --max-time 120 "$url" || true)
+            echo "Response: $body"
+            if echo "$body" | grep -qE '"ok":true|"skipped":'; then
+              echo "✅ Day watch ran"
+              exit 0
+            fi
+            [ "$attempt" -lt 3 ] && { echo "Unexpected response — retrying in 20s"; sleep 20; }
+          done
+          echo "::error::Day watch did not respond as expected after 3 attempts"
+          exit 1

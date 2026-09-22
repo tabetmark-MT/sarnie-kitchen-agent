@@ -4,8 +4,11 @@ import { sendMessage, sendChatAction, setWebhook, parseUpdate } from './telegram
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
 import { runNightlyBackup, formatBackupResult } from './backup.js';
 import { runInAppSnapshot, formatSnapshotResult } from './snapshot.js';
+import { runHeartbeat, formatHeartbeat, heartbeatAlreadySentThisWeek } from './heartbeat.js';
+import { runClockoutNudge, formatClockoutNudge, autoCloseRate } from './clockoutNudge.js';
+import { runComplianceWatch, formatComplianceWatch, markComplianceAlerted, complianceScorecard } from './complianceWatch.js';
 import { runAutoClockOut, formatAutoClockOut } from './autoClockout.js';
-import { supabase, getSetting, upsertSetting, getComplianceSnapshot } from './supabase.js';
+import { supabase, getSetting, upsertSetting, getComplianceSnapshot, markRun } from './supabase.js';
 import { authorisedIntel, buildComplianceSnapshot } from './intel.js';
 
 const app  = express();
@@ -72,6 +75,7 @@ async function runSnapshotAndNotify() {
     const result = await runInAppSnapshot();
     const msg = formatSnapshotResult(result);
     if (msg) console.log('[Snapshot]', result.counts);
+    if (result.ok) await markRun('snapshot');
     return result;
   } catch (err) {
     console.error('[Snapshot] failed:', err.message);
@@ -141,6 +145,7 @@ async function runRiskCheck() {
     await sendMessage(OWNER_CHAT_ID, '✅ All compliance flags cleared — you\'re green again.');
   }
   await upsertSetting('last_risk_flags', flags);
+  await markRun('riskcheck');
   return { ok: true, newFlags, total: flags.length };
 }
 
@@ -186,6 +191,7 @@ async function runBackupWatch() {
   const state = stale ? `stale:${todayLdn}` : partial ? `partial:${todayLdn}` : 'ok';
   const prev = await getSetting('last_backup_watch');
 
+  await markRun('backup_watch');
   if (state === 'ok') {
     if (prev && prev !== 'ok') {
       await sendMessage(OWNER_CHAT_ID, '✅ In-app backup is running again — a fresh snapshot landed.');
@@ -218,6 +224,92 @@ app.all(`/tasks/backup-watch/${WEBHOOK_SECRET}`, async (req, res) => {
   catch (e) { console.error('[BackupWatch] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// ── Day watch: one dispatcher for every time-of-day check ───────────────────
+// Watchers 1 and 2 could each have had their own cron, endpoint and workflow —
+// the pattern the repo already uses. Three jobs would have meant nine moving
+// parts, three GitHub schedules and three things for the heartbeat to track,
+// for two checks that both run during the same trading day.
+//
+// So they share one hourly pull instead. Each check decides for itself whether
+// it is in its window, so adding another is a function call rather than another
+// workflow. One schedule, one heartbeat entry per check, far less to go wrong.
+//
+// Alerts are delivered ONE message per pull, and each check is marked as fired
+// only after the send succeeds — a Telegram outage must not silently consume
+// the day's only warning.
+async function runDayWatch() {
+  const out = { at: new Date().toISOString() };
+
+  // Compliance — hourly 11:00–22:30
+  try {
+    const c = await runComplianceWatch();
+    out.compliance = c.skipped ? { skipped: c.skipped } : { alerts: c.alerts.length, bridge: c.bridgeReachable };
+    const msg = formatComplianceWatch(c);
+    if (msg) {
+      await sendMessage(OWNER_CHAT_ID, msg);
+      await markComplianceAlerted(c.state, c.today, c.alerts.map(a => a.check));
+    }
+  } catch (e) {
+    console.error('[ComplianceWatch] failed:', e.message);
+    out.compliance = { error: e.message };
+  }
+
+  // Clock-out nudge — 21:40–22:00 only, gated inside
+  try {
+    const n = await runClockoutNudge();
+    out.clockoutNudge = n.skipped ? { skipped: n.skipped } : { open: n.open ?? 0 };
+    const msg = formatClockoutNudge(n);
+    if (msg) await sendMessage(OWNER_CHAT_ID, msg);
+  } catch (e) {
+    console.error('[ClockoutNudge] failed:', e.message);
+    out.clockoutNudge = { error: e.message };
+  }
+
+  return { ok: true, ...out };
+}
+
+app.all(`/tasks/day-watch/${WEBHOOK_SECRET}`, async (req, res) => {
+  try { res.json(await runDayWatch()); }
+  catch (e) { console.error('[DayWatch] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// ── Heartbeat: proof every other job is alive ───────────────────────────────
+async function runHeartbeatAndSend({ force = false } = {}) {
+  if (!force && await heartbeatAlreadySentThisWeek()) {
+    return { ok: true, alreadySentThisWeek: true };
+  }
+  const r = await runHeartbeat();
+  const rate = await autoCloseRate(7).catch(() => null);
+  const score = await complianceScorecard(7).catch(() => null);
+
+  let msg = `📋 <b>Monday check — everything that should have run</b>\n\n` + formatHeartbeat(r);
+  if (rate) {
+    msg += `\n\n<b>Shifts closed automatically</b> — ${rate.auto} of ${rate.total} (${rate.pct}%) over ${rate.days} days`
+         + `\n<i>Target is under 3%. Every one of these is a placeholder finish time.</i>`;
+  }
+  if (score) {
+    msg += `\n\n<b>Last 7 days</b> — ${score.tradingDays} trading days`
+         + `\n• Opening ${score.opening} · Closing ${score.closing}`
+         + `\n• Hot-holding ${score.hotholdingPerDay}/day <i>(4 required)</i>`
+         + `\n• Deep clean ${score.deepClean}`;
+  }
+  await sendMessage(OWNER_CHAT_ID, msg);
+  return { ok: true, stale: r.stale.length, healthy: r.healthy.length };
+}
+
+app.all(`/tasks/heartbeat/${WEBHOOK_SECRET}`, async (req, res) => {
+  try {
+    // Monday only, from 09:00 London — unless forced by hand.
+    const force = 'force' in (req.query || {});
+    const p = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', weekday: 'short', hour: '2-digit', hourCycle: 'h23' })
+      .formatToParts(new Date()).reduce((a, x) => (a[x.type] = x.value, a), {});
+    if (!force && (p.weekday !== 'Mon' || Number(p.hour) < 9)) {
+      return res.json({ skipped: `not Monday 09:00+ London (${p.weekday} ${p.hour}:00)` });
+    }
+    res.json(await runHeartbeatAndSend({ force }));
+  } catch (e) { console.error('[Heartbeat] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // Backup in-process poll every 30 min (fires when awake; the GitHub Actions ping
 // guarantees it runs even when the free Render instance is asleep).
 cron.schedule('*/30 * * * *', () => { runRiskCheck().catch(e => console.error('[RiskCheck cron]', e.message)); }, { timezone: 'Europe/London' });
@@ -227,6 +319,13 @@ cron.schedule('*/30 * * * *', () => { runRiskCheck().catch(e => console.error('[
 // (wake-kitchen-agent runs 05:00–22:00). The /tasks endpoint above covers the
 // case where Render slept through it.
 cron.schedule('15 9 * * *', () => { runBackupWatch().catch(e => console.error('[BackupWatch cron]', e.message)); }, { timezone: 'Europe/London' });
+
+// Day watch: hourly through trading hours. Each check gates its own window.
+cron.schedule('5 11-22 * * *', () => { runDayWatch().catch(e => console.error('[DayWatch cron]', e.message)); }, { timezone: 'Europe/London' });
+// The clock-out nudge needs 21:45 exactly, which the hourly :05 pull misses.
+cron.schedule('45 21 * * *', () => { runDayWatch().catch(e => console.error('[DayWatch 21:45]', e.message)); }, { timezone: 'Europe/London' });
+// Heartbeat: Monday 09:00 London.
+cron.schedule('0 9 * * 1', () => { runHeartbeatAndSend().catch(e => console.error('[Heartbeat cron]', e.message)); }, { timezone: 'Europe/London' });
 
 // ── Compliance intelligence snapshot (read-only, for Cowork weekly report) ───
 // Token-secured (INTEL_API_TOKEN) via Bearer header or ?token=. Optional
@@ -354,6 +453,7 @@ async function runMorningDebrief() {
   if (hourLdn < Number(MORNING_HOUR)) return { skipped: true, reason: `before ${MORNING_HOUR}:00 London` };
   if ((await getSetting('last_debrief_date')) === todayLdn) return { skipped: true, reason: 'already sent today' };
   const report = await generateMorningDebrief();
+  await markRun('debrief');
   await sendMessage(OWNER_CHAT_ID, report);
   await upsertSetting('last_debrief_date', todayLdn);
   console.log('[Debrief] sent ✅');

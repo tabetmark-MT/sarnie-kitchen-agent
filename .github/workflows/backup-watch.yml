@@ -1,0 +1,49 @@
+name: Backup Watch
+
+# Checks once a morning that the in-app restore point actually got written, and
+# alerts Telegram if it did not. Added 22 Sep 2026.
+#
+# WHY THIS FILE EXISTS: the endpoint and the in-process cron were added the day
+# before and this was not. It appeared to work only because wake-kitchen-agent
+# happens to ping Render every 10 minutes between 06:00 and 23:00 London, so the
+# instance was awake at 09:15 — an undocumented dependency on an unrelated job.
+# Change that job's hours and this watch would have gone quiet with nothing to
+# say so, which is the exact failure it was built to catch.
+#
+# 08:00 and 09:00 UTC: GitHub cron is UTC and does not follow DST, so firing on
+# two adjacent hours covers both BST and GMT. The endpoint de-dups per London
+# day against the `last_backup_watch` marker — it alerts at most once per
+# condition per day — so the second ping is harmless. There is deliberately no
+# hour gate: unlike the risk watch this asks a question about last night, which
+# is equally answerable at 09:00 or 10:00.
+# Reuses the BACKUP_URL secret — no new secret needed.
+on:
+  schedule:
+    - cron: '0 8,9 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  backup-watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Poll backup watch
+        env:
+          BACKUP_URL: ${{ secrets.BACKUP_URL }}
+        run: |
+          url="${BACKUP_URL//\/tasks\/backup\///tasks/backup-watch/}"
+          # Render's free tier sleeps; the first call pays a cold start. Retry
+          # rather than fail — a missed poll is harmless (the endpoint de-dups)
+          # but a false alarm email is not.
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt — calling backup-watch (cold start can take ~60s)…"
+            body=$(curl -s --max-time 120 "$url" || true)
+            echo "Response: $body"
+            if echo "$body" | grep -qE '"ok":true|"skipped":'; then
+              echo "✅ Backup watch ran"
+              exit 0
+            fi
+            [ "$attempt" -lt 3 ] && { echo "Unexpected response — retrying in 20s"; sleep 20; }
+          done
+          echo "::error::Backup watch did not respond as expected after 3 attempts"
+          exit 1

@@ -259,10 +259,61 @@ export async function getRecentAudit(limit = 50) {
 }
 
 // ── Fetch settings ─────────────────────────────────────────────────────────
+// PostgREST caps an unbounded select at 1000 rows and says NOTHING — the same
+// silence that truncated every nightly backup for months. app_settings holds 28
+// rows today, so this is headroom rather than a fix; the danger is the pattern
+// of one row per alert per day, which reaches 1000 in under a year and then
+// starts dropping settings at random with no error anywhere. Watchers keep their
+// state in ONE row each (see watchState below) precisely so that never happens.
+//
+// The explicit limit turns a silent truncation into a visible one: if this ever
+// trips, the warning fires instead of settings quietly going missing.
+const SETTINGS_CAP = 5000;
+
 export async function getSettings() {
-  const { data } = await supabase.from('app_settings').select('*');
+  const { data, error } = await supabase.from('app_settings').select('*').limit(SETTINGS_CAP);
+  if (error) { console.error('[Supabase] getSettings failed:', error.message); return {}; }
   if (!data) return {};
+  if (data.length >= SETTINGS_CAP) {
+    console.error(`[Supabase] app_settings hit the ${SETTINGS_CAP}-row cap — settings are being silently dropped.`);
+  }
   return Object.fromEntries(data.map(s => [s.key, s.value]));
+}
+
+// ── Watcher state ────────────────────────────────────────────────────────────
+// One row per watcher, holding every de-duplication marker that watcher needs,
+// instead of a row per alert per day. Two reasons, both learned the hard way:
+// app_settings is read WHOLE by both the app and this agent on every load, so
+// each extra row is paid for everywhere; and the row count is what walks into
+// the PostgREST cap above.
+//
+// Callers get a plain object and hand back a plain object. Keys inside it are
+// the caller's business — typically `${check}:${londonDate}`.
+export async function getWatchState(watcher) {
+  const v = await getSetting(`watch_state_${watcher}`);
+  return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+}
+
+// Drops markers older than `keepDays` so the blob cannot grow without limit
+// either — the per-row problem in miniature.
+export async function setWatchState(watcher, state, keepDays = 14) {
+  const cutoff = new Date(Date.now() - keepDays * 86400000)
+    .toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+  const pruned = {};
+  for (const [k, v] of Object.entries(state || {})) {
+    const date = String(k).slice(-10);                 // trailing YYYY-MM-DD, if any
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date) && date < cutoff) continue;
+    pruned[k] = v;
+  }
+  await upsertSetting(`watch_state_${watcher}`, pruned);
+  return pruned;
+}
+
+// Heartbeat marker. Every watcher calls this on a successful run so the Monday
+// heartbeat can prove it is alive — silence in the chat, proof of life in the
+// digest.
+export async function markRun(job) {
+  await upsertSetting(`last_run_${job}`, new Date().toISOString());
 }
 
 // ── Write helpers: onboard team members (owner/admin-gated at the caller) ────

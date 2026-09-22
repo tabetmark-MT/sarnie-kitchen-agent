@@ -1,0 +1,39 @@
+name: Heartbeat
+
+# Monday proof-of-life for every scheduled job, including the six pg_cron jobs
+# inside the database that no marker in this repo could otherwise see.
+#
+# It sends whether or not anything is wrong. A monitor that only speaks up on
+# bad news is itself unmonitored — and this whole file exists because jobs in
+# this system have stopped silently three times: auto clock-out for two days,
+# the nightly backup truncating for months, the in-app snapshot twice.
+#
+# 08:00 and 09:00 UTC covers Monday 09:00 London in both BST and GMT. The
+# endpoint gates to Monday, London hour >= 9, and once per ISO week.
+on:
+  schedule:
+    - cron: '0 8,9 * * 1'
+  workflow_dispatch: {}
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Poll heartbeat
+        env:
+          BACKUP_URL: ${{ secrets.BACKUP_URL }}
+        run: |
+          url="${BACKUP_URL//\/tasks\/backup\///tasks/heartbeat/}"
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt — calling heartbeat (cold start can take ~60s)…"
+            body=$(curl -s --max-time 120 "$url" || true)
+            echo "Response: $body"
+            if echo "$body" | grep -qE '"ok":true|"skipped":'; then
+              echo "✅ Heartbeat ran"
+              exit 0
+            fi
+            [ "$attempt" -lt 3 ] && { echo "Unexpected response — retrying in 20s"; sleep 20; }
+          done
+          echo "::error::Heartbeat did not respond as expected after 3 attempts"
+          exit 1
