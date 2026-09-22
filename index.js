@@ -129,9 +129,81 @@ app.all(`/tasks/risk-check/${WEBHOOK_SECRET}`, async (req, res) => {
   catch (e) { console.error('[RiskCheck] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// ── In-app backup watch ──────────────────────────────────────────────────────
+// The kitchen app takes its own snapshot into the `backups` table, separately
+// from the nightly Dropbox job. It runs IN THE BROWSER, so it only happens when
+// someone has the app open AND signed in — and on 21 Sep 2026 the 23:00
+// end-of-day snapshot fired with no session, was refused, and told nobody. The
+// app now shows that failure on the device it happened on, which does not help
+// if the device is a tablet in a kitchen nobody is looking at.
+//
+// It cannot report to us itself, either: the failure mode IS "not signed in",
+// and an unauthenticated client cannot write to the database to raise a flag.
+// Anything the app could tell us, it can only tell us when it is working.
+//
+// So this watches from the outside, with the service key, and needs nothing
+// from the app at all. It notices both "no snapshot happened" and "a snapshot
+// happened but is partial".
+const BACKUP_STALE_HOURS = 26; // a daily job, plus room for a late night
+
+async function runBackupWatch() {
+  const { data, error } = await supabase
+    .from('backups')
+    .select('created_at, backup_type, record_count')
+    .eq('backup_type', 'daily')
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (error) throw new Error(`backups read failed: ${error.message}`);
+
+  const latest = data?.[0] || null;
+  const ageH = latest ? (Date.now() - new Date(latest.created_at).getTime()) / 3600000 : Infinity;
+  const partial = latest?.record_count?.auditComplete === false;
+  const stale = ageH > BACKUP_STALE_HOURS;
+
+  // One alert per condition per day — a nag every 30 minutes is a flag people
+  // learn to ignore, which is how the original failure stayed invisible.
+  const todayLdn = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+  const state = stale ? `stale:${todayLdn}` : partial ? `partial:${todayLdn}` : 'ok';
+  const prev = await getSetting('last_backup_watch');
+
+  if (state === 'ok') {
+    if (prev && prev !== 'ok') {
+      await sendMessage(OWNER_CHAT_ID, '✅ In-app backup is running again — a fresh snapshot landed.');
+    }
+    await upsertSetting('last_backup_watch', 'ok');
+    return { ok: true, ageH: Number(ageH.toFixed(1)) };
+  }
+  if (prev === state) return { ok: true, alreadyAlerted: state }; // said it today
+
+  const when = latest
+    ? new Date(latest.created_at).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' })
+    : 'never';
+  const msg = stale
+    ? `⚠️ <b>In-app backup has not run</b>\n\nLast snapshot inside the app: <b>${when}</b> (${Math.floor(ageH)}h ago).\n\n`
+      + `It only runs when someone has the app open and signed in, so this usually means nobody signed in — or the session had expired at 23:00.\n\n`
+      + `<b>Your off-site Dropbox backup is separate and unaffected.</b> Nothing is lost; this copy is the convenience one.`
+    : `⚠️ <b>In-app backup is incomplete</b>\n\nThe snapshot from ${when} saved only part of the audit log `
+      + `(it was taken by someone without permission to read it).\n\n<b>The off-site Dropbox backup is unaffected.</b>`;
+
+  await sendMessage(OWNER_CHAT_ID, msg);
+  await upsertSetting('last_backup_watch', state);
+  return { ok: true, alerted: state, ageH: Number(ageH.toFixed(1)) };
+}
+
+app.all(`/tasks/backup-watch/${WEBHOOK_SECRET}`, async (req, res) => {
+  try { res.json(await runBackupWatch()); }
+  catch (e) { console.error('[BackupWatch] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // Backup in-process poll every 30 min (fires when awake; the GitHub Actions ping
 // guarantees it runs even when the free Render instance is asleep).
 cron.schedule('*/30 * * * *', () => { runRiskCheck().catch(e => console.error('[RiskCheck cron]', e.message)); }, { timezone: 'Europe/London' });
+
+// Backup watch once a morning, not every 30 minutes: "no snapshot yesterday" is
+// a daily fact, and by 09:15 the night is settled and the instance is awake
+// (wake-kitchen-agent runs 05:00–22:00). The /tasks endpoint above covers the
+// case where Render slept through it.
+cron.schedule('15 9 * * *', () => { runBackupWatch().catch(e => console.error('[BackupWatch cron]', e.message)); }, { timezone: 'Europe/London' });
 
 // ── Compliance intelligence snapshot (read-only, for Cowork weekly report) ───
 // Token-secured (INTEL_API_TOKEN) via Bearer header or ?token=. Optional
