@@ -109,15 +109,13 @@ function toAppSnapshot(db) {
   };
 }
 
-// Has a snapshot already landed today (London)? The browser can still write one
-// via the manual button, and prune_backups keeps only the fullest per day, so a
-// duplicate is harmless — but there is no reason to write 800 kB for nothing.
-// The UTC instant of London midnight today. Offsets come from Intl and the
-// solve is iterated, never a hardcoded +1 — this codebase has been bitten by
-// BST/GMT day boundaries in the backups, the labour feed and the closures list.
-function ldnMidnightUtcIso() {
+// The UTC instant of a given hour on today's London date. Offsets come from
+// Intl and the solve is iterated, never a hardcoded +1 — this codebase has been
+// bitten by BST/GMT day boundaries in the backups, the labour feed and the
+// closures list.
+function ldnHourUtcIso(hour = 0) {
   const [y, m, d] = ldnDayKey().split('-').map(Number);
-  const naive = Date.UTC(y, m - 1, d, 0, 0, 0);
+  const naive = Date.UTC(y, m - 1, d, hour, 0, 0);
   const offsetAt = (t) => {
     const probe = new Date(t);
     return new Date(probe.toLocaleString('en-US', { timeZone: 'Europe/London' }))
@@ -128,8 +126,28 @@ function ldnMidnightUtcIso() {
   return new Date(t).toISOString();
 }
 
-async function snapshotExistsToday() {
-  const sinceIso = ldnMidnightUtcIso();
+// Has an EVENING snapshot already landed today?
+//
+// This asks "since 21:00 London", not "since midnight", and the difference is
+// the whole point. The nightly chain is triggered twice: a GitHub Actions
+// schedule at 21:00 UTC, and an external pinger around 23:25 UTC — which in BST
+// is 00:25, i.e. already the NEXT London day. So a midnight cutoff meant the
+// 00:25 run filled that day's slot with a snapshot of the PREVIOUS day's
+// trading, and the 22:00 run that evening — the fullest one, after a whole day
+// of service — found the slot taken and skipped.
+//
+// Observed exactly that on 23 Sep 2026: the day's only restore point was taken
+// at 00:24 and held 1,935 audit rows while the live table had moved to 1,939 by
+// lunchtime, with no further snapshot due.
+//
+// This is the same rule the browser version used and which I dropped when
+// moving the job server-side: "a backup from earlier today must not suppress
+// this one — it is the fullest." An extra row costs 800 kB for a few hours;
+// prune_backups keeps the fullest per London day at 03:40 and drops the rest.
+const EVENING_FROM_HOUR = 21;
+
+async function eveningSnapshotExists() {
+  const sinceIso = ldnHourUtcIso(EVENING_FROM_HOUR);
   const { count, error } = await supabase
     .from('backups')
     .select('id', { count: 'exact', head: true })
@@ -140,8 +158,8 @@ async function snapshotExistsToday() {
 }
 
 export async function runInAppSnapshot({ force = false } = {}) {
-  if (!force && await snapshotExistsToday()) {
-    return { ok: true, skipped: true, reason: 'already_done_today' };
+  if (!force && await eveningSnapshotExists()) {
+    return { ok: true, skipped: true, reason: 'evening_snapshot_already_done' };
   }
 
   // Throws on a short read — a truncated restore point is worse than none, and
