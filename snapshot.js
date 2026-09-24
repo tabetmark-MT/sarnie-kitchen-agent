@@ -129,9 +129,12 @@ function ldnHourUtcIso(hour = 0) {
 // Has an EVENING snapshot already landed today?
 //
 // This asks "since 21:00 London", not "since midnight", and the difference is
-// the whole point. The nightly chain is triggered twice: a GitHub Actions
-// schedule at 21:00 UTC, and an external pinger around 23:25 UTC — which in BST
-// is 00:25, i.e. already the NEXT London day. So a midnight cutoff meant the
+// the whole point. The nightly chain is triggered twice: Render's in-process
+// cron at 22:00 London, and the GitHub Actions workflow — scheduled for 21:00
+// UTC but in practice started 1.5-2.75 hours late by GitHub's queue (22:36 to
+// 23:45 UTC across 16-23 Sep 2026). In BST a 23:25 UTC start is 00:25, i.e.
+// already the NEXT London day. (This was once blamed on an "external pinger";
+// run timestamps proved it was GitHub itself.) So a midnight cutoff meant the
 // 00:25 run filled that day's slot with a snapshot of the PREVIOUS day's
 // trading, and the 22:00 run that evening — the fullest one, after a whole day
 // of service — found the slot taken and skipped.

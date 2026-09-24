@@ -37,9 +37,9 @@ app.use(express.json());
 //
 // It moves to an Authorization header, which is not logged by any of the above.
 //
-// The legacy path form KEEPS WORKING for now, deliberately. GitHub's scheduled
-// workflows and the external pinger are configured elsewhere and cannot all be
-// switched in the same instant as a deploy; breaking the nightly backup to fix
+// The legacy path form KEEPS WORKING for now, deliberately. The GitHub
+// workflows were switched in the same commit but GitHub queues scheduled runs
+// for hours, so a run queued on the old definition could still arrive late; breaking the nightly backup to fix
 // a logging problem would be the wrong trade. Legacy use is logged so the
 // switch-off can be made on evidence rather than hope.
 function secretMatches(given) {
@@ -64,7 +64,7 @@ function task(name, handler) {
   app.all(`/tasks/${name}/${WEBHOOK_SECRET}`, (req, res) => {
     console.warn(`[Auth] DEPRECATED path secret used for /tasks/${name} — move the caller to an Authorization header`);
     // Also recorded where it can be READ. Render's logs are not queryable from
-    // outside, so "has cron-job.org been switched over?" had no answer short of
+    // outside, so "is anything still using the old form?" had no answer short of
     // logging into Render. This row answers it: when it stops updating, the
     // legacy form can be removed. Best-effort — never blocks the task itself.
     upsertSetting('last_legacy_task_auth', {
