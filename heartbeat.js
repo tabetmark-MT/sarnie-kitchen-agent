@@ -25,6 +25,7 @@ const EXPECTED_HOURS = {
   debrief:          26,   // daily 10:00
   backup:           26,   // nightly 22:00 (Dropbox)
   snapshot:         26,   // nightly 22:00 (in-app restore point)
+  storage_backup:   26,   // nightly 22:00 (certificate + RTW files)
   riskcheck:         2,   // every 30 min, 07:00–22:00
   backup_watch:     26,   // daily 09:15
   clockout_nudge:   26,   // daily 21:45

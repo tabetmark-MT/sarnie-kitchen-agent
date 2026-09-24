@@ -10,7 +10,23 @@ export const dropboxConfigured = () =>
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Tokens live ~4 hours and every call used to mint a fresh one. That was fine
+// for a job that uploaded one file a night; the storage mirror uploads one file
+// per changed certificate, so a cold first run would have done two dozen token
+// exchanges for no reason. Cached with a generous safety margin — if it expires
+// mid-run the next call simply mints another.
+let cachedToken = null;
+let cachedUntil = 0;
+
 async function getAccessToken() {
+  if (cachedToken && Date.now() < cachedUntil) return cachedToken;
+  const tok = await mintAccessToken();
+  cachedToken = tok;
+  cachedUntil = Date.now() + 45 * 60 * 1000;   // 45 min, well inside the ~4h life
+  return tok;
+}
+
+async function mintAccessToken() {
   const { DROPBOX_APP_KEY, DROPBOX_APP_SECRET, DROPBOX_REFRESH_TOKEN } = process.env;
   const auth = Buffer.from(`${DROPBOX_APP_KEY}:${DROPBOX_APP_SECRET}`).toString('base64');
   // Dropbox's token endpoint occasionally 500s or rate-limits (429) for a few
@@ -40,6 +56,24 @@ async function getAccessToken() {
     if (attempt < 4) await sleep(attempt * 2000);  // 2s, 4s, 6s
   }
   throw new Error(`${lastErr.message} (after 4 attempts)`);
+}
+
+// Read a file back. Used by the storage mirror to fetch its own manifest, which
+// lives in Dropbox rather than in app_settings — that table is read whole by
+// both the app and this agent on every load, and a manifest that grows with the
+// bucket has no business in it.
+// Returns null when the file does not exist yet (first run), and throws on
+// anything else so a real failure is never mistaken for an empty manifest.
+export async function downloadFromDropbox(path) {
+  const token = await getAccessToken();
+  const res = await fetch('https://content.dropboxapi.com/2/files/download', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Dropbox-API-Arg': JSON.stringify({ path }) },
+  });
+  if (res.ok) return Buffer.from(await res.arrayBuffer());
+  const body = await res.text();
+  if (res.status === 409 && /not_found/.test(body)) return null;
+  throw new Error(`Dropbox download failed: ${res.status} ${body}`);
 }
 
 // Upload a file (overwrites same-named file for the day). `contents` = Buffer/string.

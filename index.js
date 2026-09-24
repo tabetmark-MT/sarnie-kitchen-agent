@@ -4,6 +4,7 @@ import { sendMessage, sendChatAction, setWebhook, parseUpdate } from './telegram
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
 import { runNightlyBackup, formatBackupResult } from './backup.js';
 import { runInAppSnapshot, formatSnapshotResult } from './snapshot.js';
+import { runStorageBackup, formatStorageBackup } from './storageBackup.js';
 import { runHeartbeat, formatHeartbeat, heartbeatAlreadySentThisWeek } from './heartbeat.js';
 import { runClockoutNudge, formatClockoutNudge, autoCloseRate } from './clockoutNudge.js';
 import { runComplianceWatch, formatComplianceWatch, markComplianceAlerted, complianceScorecard } from './complianceWatch.js';
@@ -86,10 +87,31 @@ async function runSnapshotAndNotify() {
   }
 }
 
+// Certificates and right-to-work documents are FILES in Supabase Storage, not
+// rows — the table backup has never included them. Runs before the table backup
+// so a slow mirror can never delay the disaster-recovery copy past midnight.
+// Never throws: a document mirror failing must not stop the tables being saved.
+async function runStorageBackupAndNotify() {
+  try {
+    const result = await runStorageBackup();
+    const msg = formatStorageBackup(result);
+    if (msg) await sendMessage(OWNER_CHAT_ID, msg);
+    if (!result.skipped) console.log('[StorageBackup]', { uploaded: result.uploaded, skipped: result.skipped, failed: result.failed?.length });
+    return result;
+  } catch (err) {
+    console.error('[StorageBackup] failed:', err.message);
+    await sendMessage(OWNER_CHAT_ID,
+      `⚠️ <b>Document backup failed</b>\n\n${err.message}\n\n`
+      + `<b>The table backup is separate and unaffected.</b>`);
+    return { ok: false, error: err.message };
+  }
+}
+
 async function triggerBackup(res) {
   try {
     await runAutoClockOutAndNotify(); // forgot-to-clock-out check rides the nightly trigger
     await runSnapshotAndNotify();     // in-app restore point, before the off-site copy
+    await runStorageBackupAndNotify();// certificate + RTW files, which tables don't carry
     const result = await runNightlyBackup();
     // Stay silent when another scheduler already backed up today (de-dup), and
     // when Dropbox simply isn't configured yet. Only notify on a real backup/error.
@@ -476,6 +498,7 @@ cron.schedule(`${BACKUP_MINUTE} ${BACKUP_HOUR} * * *`, async () => {
   try {
     await runAutoClockOutAndNotify(); // close anyone who forgot to clock out at 22:00
     await runSnapshotAndNotify();     // in-app restore point, before the off-site copy
+    await runStorageBackupAndNotify();// certificate + RTW files, which tables don't carry
     const result = await runNightlyBackup();
     console.log('[Cron] Backup:', result.skipped ? '↩︎ already done today' : result.ok ? `✅ ${result.path}` : `⚠️ ${result.reason}`);
     // Stay silent if already done today (another scheduler) or not configured.
