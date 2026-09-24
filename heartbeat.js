@@ -43,6 +43,15 @@ const PG_CRON_EXPECTED_HOURS = {
   'prune-app-backups':      26,
   'prune-http-responses':   26,
   'prewarm-agent-backup':   26,
+  // The backstop callers (added 24 Sep 2026). Generous windows: several only
+  // fire in part of the day, and this catches "stopped", not "late".
+  'backstop-risk-check':     26,
+  'backstop-day-watch':      26,
+  'backstop-clockout-nudge': 26,
+  'backstop-backup-watch':   26,
+  'backstop-debrief':        26,
+  'backstop-nightly-backup': 26,
+  'backstop-heartbeat':     170,
 };
 
 const ldn = (iso) => new Date(iso).toLocaleString('en-GB', {
@@ -77,15 +86,29 @@ async function checkPgCron() {
   return { healthy, stale };
 }
 
+// pg_cron calls a job "succeeded" once the HTTP request is queued, whatever the
+// agent then answers. A backstop that had started getting 401s would look green
+// forever. This reads the answers themselves.
+async function checkBackstopAnswers() {
+  const { data, error } = await supabase.rpc('backstop_call_health');
+  if (error) return { unavailable: error.message, bad: [] };
+  const bad = (data || []).filter((r) => Number(r.refused) > 0 || Number(r.failed) > 0)
+    .map((r) => ({ task: r.task, refused: Number(r.refused), failed: Number(r.failed), calls: Number(r.calls), last: r.last_status }));
+  return { bad, rows: data || [] };
+}
+
 export async function runHeartbeat() {
   const agents = await checkAgentJobs();
   const db = await checkPgCron();
+  const answers = await checkBackstopAnswers();
   const stale = [...agents.stale, ...db.stale];
   const healthy = [...agents.healthy, ...db.healthy];
   await markRun('heartbeat');
   return {
-    ok: stale.length === 0,
+    ok: stale.length === 0 && !answers.bad.length,
     stale, healthy,
+    backstopBad: answers.bad,
+    backstopUnavailable: answers.unavailable || null,
     missing: agents.missing,
     dbUnavailable: db.unavailable || null,
   };
@@ -102,7 +125,7 @@ export function formatHeartbeat(r) {
       lines.push(`• <b>${s.job}</b> — ${when} (expected within ${s.maxH}h)${fails}`);
     }
     lines.push('');
-  } else {
+  } else if (!r.backstopBad?.length) {
     lines.push('✅ <b>All jobs alive</b>');
     lines.push('');
   }
@@ -119,6 +142,14 @@ export function formatHeartbeat(r) {
   if (r.missing.length) {
     lines.push('');
     lines.push(`<i>No marker yet (will appear after the first run): ${r.missing.map(m => m.job).join(', ')}</i>`);
+  }
+  if (r.backstopBad?.length) {
+    lines.push('');
+    lines.push('🔴 <b>Backstop calls being refused</b> — the database scheduler is reaching the agent but not getting in:');
+    for (const b of r.backstopBad) {
+      lines.push(`• ${b.task} — ${b.refused} refused, ${b.failed} failed of ${b.calls} (last ${b.last ?? 'no answer'})`);
+    }
+    lines.push('<i>401 means the Vault token and the agent\'s stored hash no longer match.</i>');
   }
   if (r.dbUnavailable) {
     lines.push('');
