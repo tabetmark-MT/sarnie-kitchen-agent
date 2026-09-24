@@ -28,13 +28,21 @@ jobs:
         env:
           BACKUP_URL: ${{ secrets.BACKUP_URL }}
         run: |
-          url="${BACKUP_URL//\/tasks\/backup\///tasks/risk-check/}"
+          # BACKUP_URL still holds the legacy form:
+          #   https://<host>/tasks/backup/<secret>
+          # Split it so the secret travels in a header instead of the path.
+          # add-mask is required: GitHub masks the whole secret string in
+          # logs, but NOT a substring of it, and the secret alone is one.
+          base="${BACKUP_URL%/tasks/*}"
+          secret="${BACKUP_URL##*/}"
+          echo "::add-mask::$secret"
+          url="$base/tasks/risk-check"
           # Render's free tier sleeps, so the first call of a quiet period pays a
           # cold start. Retry rather than fail: a missed poll is harmless (the
           # endpoint de-dups and gates open hours) but a false alarm email is not.
           for attempt in 1 2 3; do
             echo "Attempt $attempt — calling risk-check (cold start can take ~60s)…"
-            body=$(curl -s --max-time 120 "$url" || true)
+            body=$(curl -s --max-time 120 -H "Authorization: Bearer $secret" "$url" || true)
             echo "Response: $body"
             if echo "$body" | grep -qE '"ok":true|"skipped":|"seeded":true'; then
               echo "✅ Risk watch ran"

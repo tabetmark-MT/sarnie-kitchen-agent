@@ -35,10 +35,18 @@ jobs:
         env:
           BACKUP_URL: ${{ secrets.BACKUP_URL }}
         run: |
-          url="${BACKUP_URL//\/tasks\/backup\///tasks/day-watch/}"
+          # BACKUP_URL still holds the legacy form:
+          #   https://<host>/tasks/backup/<secret>
+          # Split it so the secret travels in a header instead of the path.
+          # add-mask is required: GitHub masks the whole secret string in
+          # logs, but NOT a substring of it, and the secret alone is one.
+          base="${BACKUP_URL%/tasks/*}"
+          secret="${BACKUP_URL##*/}"
+          echo "::add-mask::$secret"
+          url="$base/tasks/day-watch"
           for attempt in 1 2 3; do
             echo "Attempt $attempt — calling day-watch (cold start can take ~60s)…"
-            body=$(curl -s --max-time 120 "$url" || true)
+            body=$(curl -s --max-time 120 -H "Authorization: Bearer $secret" "$url" || true)
             echo "Response: $body"
             if echo "$body" | grep -qE '"ok":true|"skipped":'; then
               echo "✅ Day watch ran"

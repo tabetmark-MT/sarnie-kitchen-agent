@@ -1,4 +1,5 @@
 import express from 'express';
+import { timingSafeEqual } from 'node:crypto';
 import cron    from 'node-cron';
 import { sendMessage, sendChatAction, setWebhook, parseUpdate } from './telegram.js';
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
@@ -23,6 +24,48 @@ const BACKUP_HOUR     = process.env.BACKUP_HOUR    || '22';  // nightly Dropbox 
 const BACKUP_MINUTE   = process.env.BACKUP_MINUTE  || '0';
 
 app.use(express.json());
+
+// ── Task authorisation ───────────────────────────────────────────────────────
+// Scheduled endpoints used to carry the secret in the PATH:
+//   /tasks/day-watch/<WEBHOOK_SECRET>
+// A URL is the single most-copied string in a system. That one appears in
+// Render's access logs, in GitHub Actions run logs, in any proxy or CDN in
+// front, in error traces, and in the browser history of anyone who ever pasted
+// it to test. Nine endpoints now carry it, and it is the same secret on all of
+// them — one log export and every scheduled job in the system is triggerable by
+// a stranger.
+//
+// It moves to an Authorization header, which is not logged by any of the above.
+//
+// The legacy path form KEEPS WORKING for now, deliberately. GitHub's scheduled
+// workflows and the external pinger are configured elsewhere and cannot all be
+// switched in the same instant as a deploy; breaking the nightly backup to fix
+// a logging problem would be the wrong trade. Legacy use is logged so the
+// switch-off can be made on evidence rather than hope.
+function secretMatches(given) {
+  if (typeof given !== 'string' || !given) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(WEBHOOK_SECRET);
+  // Length differs → not equal, and timingSafeEqual would throw on it anyway.
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+const bearerOf = (req) => {
+  const h = req.headers.authorization || '';
+  return h.startsWith('Bearer ') ? h.slice(7).trim() : null;
+};
+
+// Registers BOTH forms for one task. Handlers are unchanged.
+function task(name, handler) {
+  app.all(`/tasks/${name}`, (req, res) => {
+    if (!secretMatches(bearerOf(req))) return res.status(401).json({ error: 'Unauthorized' });
+    return handler(req, res);
+  });
+  app.all(`/tasks/${name}/${WEBHOOK_SECRET}`, (req, res) => {
+    console.warn(`[Auth] DEPRECATED path secret used for /tasks/${name} — move the caller to an Authorization header`);
+    return handler(req, res);
+  });
+}
 
 // When this process started. Render replaces the process on every deploy, so a
 // bootedAt in the future of your last deploy proves the new code is running.
@@ -126,11 +169,10 @@ async function triggerBackup(res) {
     res.status(500).json({ ok: false, error: err.message + detail });
   }
 }
-app.get(`/tasks/backup/${WEBHOOK_SECRET}`,  (req, res) => triggerBackup(res));
-app.post(`/tasks/backup/${WEBHOOK_SECRET}`, (req, res) => triggerBackup(res));
+task('backup', (req, res) => triggerBackup(res));
 
 // Standalone auto clock-out trigger (also runs as part of the nightly backup).
-app.all(`/tasks/clockout/${WEBHOOK_SECRET}`, async (req, res) => {
+task('clockout', async (req, res) => {
   const result = await runAutoClockOutAndNotify();
   res.json(result);
 });
@@ -171,7 +213,7 @@ async function runRiskCheck() {
   return { ok: true, newFlags, total: flags.length };
 }
 
-app.all(`/tasks/risk-check/${WEBHOOK_SECRET}`, async (req, res) => {
+task('risk-check', async (req, res) => {
   try { res.json(await runRiskCheck()); }
   catch (e) { console.error('[RiskCheck] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
 });
@@ -241,7 +283,7 @@ async function runBackupWatch() {
   return { ok: true, alerted: state, ageH: Number(ageH.toFixed(1)) };
 }
 
-app.all(`/tasks/backup-watch/${WEBHOOK_SECRET}`, async (req, res) => {
+task('backup-watch', async (req, res) => {
   try { res.json(await runBackupWatch()); }
   catch (e) { console.error('[BackupWatch] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
 });
@@ -290,7 +332,7 @@ async function runDayWatch() {
   return { ok: true, ...out };
 }
 
-app.all(`/tasks/day-watch/${WEBHOOK_SECRET}`, async (req, res) => {
+task('day-watch', async (req, res) => {
   try { res.json(await runDayWatch()); }
   catch (e) { console.error('[DayWatch] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
 });
@@ -319,7 +361,7 @@ async function runHeartbeatAndSend({ force = false } = {}) {
   return { ok: true, stale: r.stale.length, healthy: r.healthy.length };
 }
 
-app.all(`/tasks/heartbeat/${WEBHOOK_SECRET}`, async (req, res) => {
+task('heartbeat', async (req, res) => {
   try {
     // Monday only, from 09:00 London — unless forced by hand.
     const force = 'force' in (req.query || {});
@@ -482,7 +524,7 @@ async function runMorningDebrief() {
   return { ok: true };
 }
 
-app.all(`/tasks/debrief/${WEBHOOK_SECRET}`, async (req, res) => {
+task('debrief', async (req, res) => {
   try { res.json(await runMorningDebrief()); }
   catch (e) { console.error('[Debrief] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
 });

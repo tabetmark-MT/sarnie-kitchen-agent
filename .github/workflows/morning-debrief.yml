@@ -24,9 +24,17 @@ jobs:
         env:
           BACKUP_URL: ${{ secrets.BACKUP_URL }}
         run: |
-          url="${BACKUP_URL//\/tasks\/backup\///tasks/debrief/}"
+          # BACKUP_URL still holds the legacy form:
+          #   https://<host>/tasks/backup/<secret>
+          # Split it so the secret travels in a header instead of the path.
+          # add-mask is required: GitHub masks the whole secret string in
+          # logs, but NOT a substring of it, and the secret alone is one.
+          base="${BACKUP_URL%/tasks/*}"
+          secret="${BACKUP_URL##*/}"
+          echo "::add-mask::$secret"
+          url="$base/tasks/debrief"
           echo "Calling debrief endpoint (cold start can take ~60s)…"
-          body=$(curl -s --max-time 180 "$url")
+          body=$(curl -s --max-time 180 -H "Authorization: Bearer $secret" "$url")
           echo "Response: $body"
           echo "$body" | grep -qE '"ok":true|"skipped":true' || { echo "::error::Debrief did not report success"; exit 1; }
           echo "✅ Debrief endpoint responded"
