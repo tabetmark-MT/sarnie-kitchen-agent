@@ -63,6 +63,14 @@ function task(name, handler) {
   });
   app.all(`/tasks/${name}/${WEBHOOK_SECRET}`, (req, res) => {
     console.warn(`[Auth] DEPRECATED path secret used for /tasks/${name} — move the caller to an Authorization header`);
+    // Also recorded where it can be READ. Render's logs are not queryable from
+    // outside, so "has cron-job.org been switched over?" had no answer short of
+    // logging into Render. This row answers it: when it stops updating, the
+    // legacy form can be removed. Best-effort — never blocks the task itself.
+    upsertSetting('last_legacy_task_auth', {
+      task: name, at: new Date().toISOString(),
+      ua: String(req.headers['user-agent'] || '').slice(0, 120),
+    }).catch(() => {});
     return handler(req, res);
   });
 }

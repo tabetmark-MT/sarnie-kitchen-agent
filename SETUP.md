@@ -43,7 +43,7 @@ server environment — never in the app/browser, never committed to git.
 | `TELEGRAM_BOT_TOKEN` | ✅ | From @BotFather — lets the server send/receive as the bot |
 | `TELEGRAM_CHAT_ID` | ✅ | Owner chat id (`2046354154`). The agent only replies to this chat. |
 | `APP_URL` | ✅ | The Render public URL (e.g. `https://sarnie-kitchen-agent.onrender.com`). Used to register the Telegram webhook on boot. |
-| `WEBHOOK_SECRET` | ✅ | Secret path segment protecting `/webhook/...` and `/tasks/backup/...` |
+| `WEBHOOK_SECRET` | ✅ | Protects `/webhook/...` (path) and every `/tasks/<name>` endpoint (sent as `Authorization: Bearer <secret>`) |
 | `DROPBOX_APP_KEY` / `DROPBOX_APP_SECRET` / `DROPBOX_REFRESH_TOKEN` | for backups | Dropbox credentials — see `SETUP-DROPBOX.md` |
 | `DROPBOX_BACKUP_PATH` | optional | Backup folder (default `/Sarnie Social Backups`) |
 | `SUPABASE_ANON_KEY` | optional | Only used as a last-resort fallback; returns nothing under RLS |

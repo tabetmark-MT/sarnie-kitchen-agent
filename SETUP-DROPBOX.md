@@ -73,8 +73,12 @@ free scheduler call the wake-and-backup endpoint:
 
 1. Sign up at **https://cron-job.org** (free).
 2. Create a cron job:
-   - **URL:** `https://sarnie-kitchen-agent.onrender.com/tasks/backup/sarnie-agent-secret`
-     (replace `sarnie-agent-secret` if you set a custom `WEBHOOK_SECRET`)
+   - **URL:** `https://sarnie-kitchen-agent.onrender.com/tasks/backup`
+   - **Advanced → Headers:** `Authorization` = `Bearer <your WEBHOOK_SECRET>`
+     Do NOT put the secret in the URL. Since 24 Sep 2026 the secret travels in a
+     header: URLs end up in access logs, proxy logs and job histories, headers
+     don't. The old `/tasks/backup/<secret>` form still works but is deprecated
+     and will be removed.
    - **Schedule:** every day at **23:00**, timezone **Europe/London**
 3. Save. That request wakes the agent and runs the backup; you'll get the
    Telegram confirmation each night.
