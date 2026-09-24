@@ -4,9 +4,26 @@ import { uploadToDropbox, dropboxConfigured } from './dropbox.js';
 const londonDate = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }); // YYYY-MM-DD
 
 // ── Off-site nightly backup: full Supabase snapshot → Dropbox ────────────────
-// Idempotent per calendar day: multiple schedulers (GitHub Actions, in-process
-// cron, external pinger) can all call this, but only the first run each day
-// actually backs up. Pass { force: true } for an on-demand /backup.
+// Two schedulers call this: Render's in-process cron at 22:00 London, and the
+// GitHub workflow, scheduled for 21:00 UTC but started 1.5-2.75 h late by
+// GitHub's queue — often after midnight London. Pass { force: true } for an
+// on-demand /backup.
+//
+// De-duplicated by ELAPSED TIME, not by calendar date. The date rule
+// ("skip if last_dropbox_backup == today") let the late GitHub run at ~00:23
+// claim the NEXT London day, so the 22:00 run that evening skipped. While
+// GitHub kept firing, that only shifted each backup by a couple of hours. On
+// 24 Sep 2026 GitHub fired no scheduled runs at all, and the rule would have
+// left 00:23 on the 24th to 22:00 on the 25th with no off-site copy: 45 hours,
+// against an accepted exposure of ~24. The in-app snapshot had the same flaw and
+// was fixed the day before.
+//
+// 12 h means one backup per night whichever scheduler arrives first. The 22:00
+// run always goes ahead, and a late GitHub run 2-3 hours after it is skipped.
+// If Render was asleep at 22:00, the GitHub run is more than 12 h after the
+// previous night and does the work instead.
+const MIN_INTERVAL_H = 12;
+
 export async function runNightlyBackup({ force = false } = {}) {
   if (!dropboxConfigured()) {
     return { ok: false, reason: 'Dropbox not configured (set DROPBOX_APP_KEY / SECRET / REFRESH_TOKEN)' };
@@ -14,8 +31,11 @@ export async function runNightlyBackup({ force = false } = {}) {
 
   const today = londonDate();
   if (!force) {
-    const last = await getSetting('last_dropbox_backup');
-    if (last === today) return { ok: true, skipped: true, reason: 'already backed up today', date: today };
+    const lastAt = await getSetting('last_run_backup');       // ISO, written on success only
+    const ageH = lastAt ? (Date.now() - new Date(lastAt).getTime()) / 3600000 : Infinity;
+    if (ageH < MIN_INTERVAL_H) {
+      return { ok: true, skipped: true, reason: `backed up ${ageH.toFixed(1)}h ago`, date: today };
+    }
   }
 
   const data = await getAllData();
