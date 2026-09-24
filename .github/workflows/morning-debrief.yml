@@ -6,9 +6,14 @@ name: Morning Debrief
 # London and only once per day, so exactly one message goes out year-round
 # (10:05 BST in summer, 10:05 GMT in winter).
 # Reuses the BACKUP_URL secret (same WEBHOOK_SECRET path) — no new secret needed.
+# Minutes are deliberately odd and off the hour. GitHub queues scheduled
+# runs and drops them under load, worst at :00 — on 23 Sep 2026 this
+# workflow and two others did not fire at all that day. The Render
+# in-process cron covered it, but the redundancy only helps if both
+# halves actually run. An uncontended minute is free reliability.
 on:
   schedule:
-    - cron: '5 8,9,10 * * *'
+    - cron: '21 8,9,10 * * *'
   workflow_dispatch: {}
 
 jobs:

@@ -10,9 +10,14 @@ name: Heartbeat
 #
 # 08:00 and 09:00 UTC covers Monday 09:00 London in both BST and GMT. The
 # endpoint gates to Monday, London hour >= 9, and once per ISO week.
+# Minutes are deliberately odd and off the hour. GitHub queues scheduled
+# runs and drops them under load, worst at :00 — on 23 Sep 2026 this
+# workflow and two others did not fire at all that day. The Render
+# in-process cron covered it, but the redundancy only helps if both
+# halves actually run. An uncontended minute is free reliability.
 on:
   schedule:
-    - cron: '0 8,9 * * 1'
+    - cron: '37 8,9 * * 1'
   workflow_dispatch: {}
 
 jobs:

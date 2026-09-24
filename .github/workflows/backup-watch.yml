@@ -17,9 +17,14 @@ name: Backup Watch
 # hour gate: unlike the risk watch this asks a question about last night, which
 # is equally answerable at 09:00 or 10:00.
 # Reuses the BACKUP_URL secret — no new secret needed.
+# Minutes are deliberately odd and off the hour. GitHub queues scheduled
+# runs and drops them under load, worst at :00 — on 23 Sep 2026 this
+# workflow and two others did not fire at all that day. The Render
+# in-process cron covered it, but the redundancy only helps if both
+# halves actually run. An uncontended minute is free reliability.
 on:
   schedule:
-    - cron: '0 8,9 * * *'
+    - cron: '23 8,9 * * *'
   workflow_dispatch: {}
 
 jobs:

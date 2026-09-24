@@ -15,10 +15,15 @@ name: Day Watch
 #
 # :44 not :00 — the clock-out nudge has to land before the 22:10 auto-close, and
 # 21:44 UTC is 22:44 BST which is too late. See the second schedule.
+# Minutes are deliberately odd and off the hour. GitHub queues scheduled
+# runs and drops them under load, worst at :00 — on 23 Sep 2026 this
+# workflow and two others did not fire at all that day. The Render
+# in-process cron covered it, but the redundancy only helps if both
+# halves actually run. An uncontended minute is free reliability.
 on:
   schedule:
-    - cron: '5 10-21 * * *'     # hourly compliance sweep
-    - cron: '45 20,21 * * *'    # 21:45 London in BST and GMT — clock-out nudge
+    - cron: '19 10-21 * * *'     # hourly compliance sweep
+    - cron: '43 20,21 * * *'    # 21:45 London in BST and GMT — clock-out nudge
   workflow_dispatch: {}
 
 jobs:

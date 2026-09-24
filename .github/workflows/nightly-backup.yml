@@ -4,9 +4,14 @@ name: Nightly Dropbox Backup
 # UTC: 21:00 UTC = 22:00 UK during BST (and 21:00 during GMT/winter) — just
 # after the kitchen closes. Runs on GitHub's infrastructure, so it fires
 # reliably even when the free Render instance is asleep (the request wakes it).
+# Minutes are deliberately odd and off the hour. GitHub queues scheduled
+# runs and drops them under load, worst at :00 — on 23 Sep 2026 this
+# workflow and two others did not fire at all that day. The Render
+# in-process cron covered it, but the redundancy only helps if both
+# halves actually run. An uncontended minute is free reliability.
 on:
   schedule:
-    - cron: '0 21 * * *'
+    - cron: '27 21 * * *'
   workflow_dispatch: {}   # allows manual "Run workflow" + automated test
 
 jobs:
