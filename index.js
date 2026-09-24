@@ -1,5 +1,5 @@
 import express from 'express';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, createHash } from 'node:crypto';
 import cron    from 'node-cron';
 import { sendMessage, sendChatAction, setWebhook, parseUpdate } from './telegram.js';
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
@@ -55,10 +55,44 @@ const bearerOf = (req) => {
   return h.startsWith('Bearer ') ? h.slice(7).trim() : null;
 };
 
+// ── Second credential: the database's own scheduler ─────────────────────────
+// GitHub Actions stopped delivering scheduled runs on 24 Sep 2026 (4 of ~32 the
+// day before, none at all that day), so pg_cron now calls these endpoints as
+// the backstop — it has run 756 of 756 wake-ups.
+//
+// Its token was generated INSIDE Postgres and lives only in Vault; nobody has
+// ever seen or typed it. This process never receives the plaintext either: it
+// holds the SHA-256 (app_settings.task_backstop_token_sha256, admin-only) and
+// checks callers against that. A leaked hash is useless — the token is 256
+// random bits.
+//
+// Cached for 5 minutes so a burst of calls is not a burst of reads. A failed
+// read keeps the previous value rather than locking pg_cron out.
+let backstopHash = null;
+let backstopHashAt = 0;
+async function backstopHashValue() {
+  if (Date.now() - backstopHashAt < 5 * 60 * 1000) return backstopHash;
+  try {
+    const v = await getSetting('task_backstop_token_sha256');
+    backstopHash = (typeof v === 'string' && /^[0-9a-f]{64}$/.test(v)) ? v : null;
+  } catch { /* keep the previous value */ }
+  backstopHashAt = Date.now();
+  return backstopHash;
+}
+async function authorised(req) {
+  const given = bearerOf(req);
+  if (!given) return false;
+  if (secretMatches(given)) return true;
+  const want = await backstopHashValue();
+  if (!want) return false;
+  const got = createHash('sha256').update(given).digest('hex');
+  return timingSafeEqual(Buffer.from(got), Buffer.from(want));   // both 64 hex chars
+}
+
 // Registers BOTH forms for one task. Handlers are unchanged.
 function task(name, handler) {
-  app.all(`/tasks/${name}`, (req, res) => {
-    if (!secretMatches(bearerOf(req))) return res.status(401).json({ error: 'Unauthorized' });
+  app.all(`/tasks/${name}`, async (req, res) => {
+    if (!(await authorised(req))) return res.status(401).json({ error: 'Unauthorized' });
     return handler(req, res);
   });
   app.all(`/tasks/${name}/${WEBHOOK_SECRET}`, (req, res) => {
