@@ -52,6 +52,8 @@ const PG_CRON_EXPECTED_HOURS = {
   'backstop-debrief':        26,
   'backstop-nightly-backup': 26,
   'backstop-heartbeat':     170,
+  // Copies backstop answers out of pg_net before its 6-hour TTL deletes them.
+  'harvest-agent-task-answers': 2,
 };
 
 const ldn = (iso) => new Date(iso).toLocaleString('en-GB', {
@@ -73,17 +75,25 @@ async function checkAgentJobs() {
 // pg_cron records every run itself, which is better evidence than a marker we
 // write about ourselves: it cannot claim success for a run that did not happen.
 async function checkPgCron() {
-  const healthy = [], stale = [];
+  const healthy = [], stale = [], missing = [];
   const { data, error } = await supabase.rpc('cron_job_health');
-  if (error) return { healthy, stale, unavailable: error.message };
+  if (error) return { healthy, stale, missing, unavailable: error.message };
   for (const row of data || []) {
     const maxH = PG_CRON_EXPECTED_HOURS[row.jobname];
     if (!maxH) continue;
+    // Never run AND never failed = its schedule has not come round yet (e.g.
+    // backstop-heartbeat, Monday 09:41, seen by the 09:00 heartbeat the first
+    // week). That is "no run yet", not "gone quiet" — listed, not alarmed.
+    // A job that has failed without ever succeeding is still stale.
+    if (!row.last_success && !Number(row.recent_failures)) {
+      missing.push({ job: row.jobname, maxH });
+      continue;
+    }
     const age = row.last_success ? hoursSince(row.last_success) : Infinity;
     const entry = { job: row.jobname, at: row.last_success, age, maxH, fails: row.recent_failures };
     (age > maxH || row.recent_failures > 0 ? stale : healthy).push(entry);
   }
-  return { healthy, stale };
+  return { healthy, stale, missing };
 }
 
 // pg_cron calls a job "succeeded" once the HTTP request is queued, whatever the
@@ -109,7 +119,7 @@ export async function runHeartbeat() {
     stale, healthy,
     backstopBad: answers.bad,
     backstopUnavailable: answers.unavailable || null,
-    missing: agents.missing,
+    missing: [...agents.missing, ...(db.missing || [])],
     dbUnavailable: db.unavailable || null,
   };
 }
