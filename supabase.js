@@ -174,6 +174,7 @@ export async function getAllData() {
     open_shift_alarm: 'detected_at',
     employee_hr: 'employee_id',
     employee_hr_private: 'employee_id',
+    employee_pay: 'employee_id',
   };
   const PAGE = 1000;
   const tables = [
@@ -186,6 +187,8 @@ export async function getAllData() {
     // empty. The in-app snapshot, which managers can open, takes employee_hr
     // only — see snapshot.js.
     'employee_hr', 'employee_hr_private', 'employee_hr_audit',
+    // Pay rates (25 Sep 2026) — moved out of the staff list; see employee_pay.
+    'employee_pay',
   ];
   const out = {};
   const short = [];
@@ -454,7 +457,14 @@ export async function buildKitchenContext() {
   const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/London' });
 
   // ── Employee Management (clock in/out + hours) ──
-  const employees = settings.employees || [];
+  // Pay rates live in employee_pay since 25 Sep 2026 (the staff list is
+  // readable by every signed-in account). The service key reads them; a failed
+  // read leaves rates blank — the cost lines then say "no rates set" rather
+  // than inventing a number.
+  const { data: payRows, error: payErr } = await supabase.from('employee_pay').select('employee_id,hourly_rate');
+  if (payErr) console.warn('[context] employee_pay read failed:', payErr.message);
+  const payMap = new Map((payRows || []).map(r => [String(r.employee_id), r.hourly_rate]));
+  const employees = (settings.employees || []).map(e => (e && payMap.has(String(e.id)) ? { ...e, hourlyRate: payMap.get(String(e.id)) } : e));
   const nowMs = Date.now();
   const startOfToday = ldnMidnight(0);
   const wd = (new Date(new Date().toLocaleString('en-US', { timeZone: LDN })).getDay() + 6) % 7;

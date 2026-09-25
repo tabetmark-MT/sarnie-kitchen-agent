@@ -109,6 +109,9 @@ function toAppSnapshot(db) {
       // read by MANAGERS, and admin-only data must not travel through it. The
       // private table lives in the Dropbox copy, which is Mark's alone.
       hr:               db.employee_hr || [],
+      // Pay rates, out of the staff list since 25 Sep 2026. `backups` is read by
+      // admins and managers only — the same people employee_pay allows.
+      pay:              db.employee_pay || [],
     },
     strippedCount,
   };
