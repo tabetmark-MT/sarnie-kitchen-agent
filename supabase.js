@@ -172,11 +172,20 @@ export async function getAllData() {
   const PK = {
     app_settings: 'key',
     open_shift_alarm: 'detected_at',
+    employee_hr: 'employee_id',
+    employee_hr_private: 'employee_id',
   };
   const PAGE = 1000;
   const tables = [
     'app_users', 'app_settings', 'checklists', 'completions', 'audit_log',
     'time_entries', 'open_shift_alarm',
+    // HR record (25 Sep 2026). The Dropbox file is the disaster-recovery copy
+    // and belongs to Mark alone, so it keeps everything, including the
+    // admin-only private table: a restore must not lose anyone's record. They
+    // are NOT in the core empty-read guard, because they legitimately start
+    // empty. The in-app snapshot, which managers can open, takes employee_hr
+    // only — see snapshot.js.
+    'employee_hr', 'employee_hr_private', 'employee_hr_audit',
   ];
   const out = {};
   const short = [];

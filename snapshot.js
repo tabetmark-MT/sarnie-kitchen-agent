@@ -104,6 +104,11 @@ function toAppSnapshot(db) {
       auditLog:         db.audit_log || [],
       employees,
       timeEntries:      (db.time_entries || []).map(fromTimeEntryRow),
+      // Manager-visible HR fields only. employee_hr_private (legal name, DOB,
+      // address, NI number, health) is deliberately absent: `backups` can be
+      // read by MANAGERS, and admin-only data must not travel through it. The
+      // private table lives in the Dropbox copy, which is Mark's alone.
+      hr:               db.employee_hr || [],
     },
     strippedCount,
   };
@@ -194,6 +199,7 @@ export async function runInAppSnapshot({ force = false } = {}) {
       auditComplete: true,
       source: 'server',
       inlineFilesStripped: strippedCount,
+      hrRecords: (db.employee_hr || []).length,
     },
     backed_up_by: 'kitchen-agent',
   };
