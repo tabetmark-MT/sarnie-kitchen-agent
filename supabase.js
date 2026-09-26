@@ -908,6 +908,9 @@ COMPLIANCE TRENDS (rolling, computed):
     'd-o-2': 'Fridge #2 Three Door Counter',  'd-c-11b': 'Fridge #2 Three Door Counter',
     'd-o-4': 'Fridge #3 Three Door Salad',    'd-c-11d': 'Fridge #3 Three Door Salad',
     'd-o-1': 'Fridge #4 Under Counter',       'd-c-11a': 'Fridge #4 Under Counter',
+    // Mid-service round, added 26 Sep 2026.
+    'd-d-f1': 'Fridge #1 Single Door Upright', 'd-d-f2': 'Fridge #2 Three Door Counter',
+    'd-d-f3': 'Fridge #3 Three Door Salad',    'd-d-f4': 'Fridge #4 Under Counter',
   };
   const fridgeStat = (t) => (t <= 5 ? 'PASS' : t <= 8 ? 'WARN' : 'FAIL');
   const set30 = new Set(lastNkeys(30));
