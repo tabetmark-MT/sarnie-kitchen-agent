@@ -670,8 +670,26 @@ export async function buildKitchenContext() {
   const monthHours = hoursLine(monthStart.getTime());
 
   // Weekly hours vs each employee's contracted/student target (+ remaining)
+  // Student visa: 20h/week in university TERM, full-time in official vacations
+  // (Mark, 28 Sep 2026). emp.termPeriods = [{ start, end|null }]; none recorded
+  // = assume term (the cap applies), which was the behaviour before.
+  // Must match inTermWeek in the kitchen app's src/lib/employeeHours.js.
+  const ldnKeyOf = (ms) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+  const termStatus = (emp) => {
+    const periods = Array.isArray(emp.termPeriods) ? emp.termPeriods.filter(p => p?.start) : [];
+    if (!periods.length) return { inTerm: true, recorded: false };
+    const mon = ldnKeyOf(weekStart.getTime() + 43200000);
+    const sun = ldnKeyOf(weekStart.getTime() + 6 * 86400000 + 43200000);
+    const inTerm = periods.some(p => p.start <= sun && (!p.end || p.end >= mon));
+    const next = periods.map(p => p.start).filter(k => k > sun).sort()[0] || null;
+    return { inTerm, recorded: true, next };
+  };
   const goalFor = (emp) => {
-    if (emp.empType === 'student') return { kind: 'cap', max: Number(emp.weeklyHours) || 20, label: 'student' };
+    if (emp.empType === 'student') {
+      const t = termStatus(emp);
+      if (!t.inTerm) return { kind: 'vacation', next: t.next, label: 'student' };
+      return { kind: 'cap', max: Number(emp.weeklyHours) || 20, label: 'student', termRecorded: t.recorded };
+    }
     if (emp.empType === 'contract' && (emp.weeklyMin || emp.weeklyMax)) return { kind: 'range', min: Number(emp.weeklyMin) || 0, max: Number(emp.weeklyMax) || 0, label: 'contract' };
     if (emp.empType === 'casual' && Number(emp.weeklyHours) > 0) return { kind: 'target', target: Number(emp.weeklyHours), label: 'casual' };
     return null;
@@ -683,10 +701,13 @@ export async function buildKitchenContext() {
       .filter(e => e.employeeId === emp.id && (e.clockOut ? new Date(e.clockOut).getTime() : nowMs) >= weekStart.getTime());
     const mins = wList.reduce((s, e) => s + entryMins(e, weekStart.getTime()), 0);
     const ph = placeholderNote(wList);
+    if (g.kind === 'vacation') {
+      return `  • ${emp.name} (student): ${fmtH(mins)} — university VACATION this week, no 20h cap (full-time allowed)${g.next ? `; term starts ${g.next}` : ''}${ph}`;
+    }
     if (g.kind === 'cap') {
       const cap = g.max * 60;
       const status = mins > cap ? `${fmtH(mins - cap)} OVER the ${g.max}h limit` : `${fmtH(cap - mins)} left of ${g.max}h`;
-      return `  • ${emp.name} (student): ${fmtH(mins)} of ${g.max}h — ${status}${ph}`;
+      return `  • ${emp.name} (student, term time${g.termRecorded ? '' : ' assumed — no term dates on file'}): ${fmtH(mins)} of ${g.max}h — ${status}${ph}`;
     }
     if (g.kind === 'range') {
       const mn = g.min * 60, mx = g.max * 60;
