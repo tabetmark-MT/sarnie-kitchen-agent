@@ -19,6 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Dropbox backup
+        # The script below reads $BACKUP_URL from the environment. The five
+        # sibling workflows always had this block; this one used the secret
+        # inline in the curl call instead, so when 7a40601 moved it to the
+        # shell variable it arrived empty and every run from 24 Sep failed.
+        env:
+          BACKUP_URL: ${{ secrets.BACKUP_URL }}
         run: |
           # BACKUP_URL still holds the legacy form:
           #   https://<host>/tasks/backup/<secret>
