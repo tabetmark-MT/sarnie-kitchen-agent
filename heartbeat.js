@@ -29,7 +29,7 @@ const EXPECTED_HOURS = {
   riskcheck:         2,   // every 30 min, 07:00–22:00
   backup_watch:     26,   // daily 09:15
   clockout_nudge:   26,   // daily 21:45
-  compliance_watch:  3,   // hourly 11:00–22:30
+  compliance_watch: 14,   // hourly 11:00–22:30; the overnight gap (22:05 -> 11:05) is 13h by design
 };
 
 // The six pg_cron jobs live in the DATABASE, not in this process, so no amount

@@ -396,7 +396,8 @@ async function runHeartbeatAndSend({ force = false } = {}) {
   if (score) {
     msg += `\n\n<b>Last 7 days</b> — ${score.tradingDays} trading days`
          + `\n• Opening ${score.opening} · Closing ${score.closing}`
-         + `\n• Hot-holding ${score.hotholdingPerDay}/day <i>(4 required)</i>`
+         + `\n• Hot-holding ${score.hotholdingPerDay}/day <i>(at least 1 a day required)</i>`
+         + (score.ruledDays ? `\n• Since 26 Sep: hot-holding met on ${score.hotholdingDaysMet} of ${score.ruledDays} days · 3 temperature rounds met on ${score.roundsDaysMet} of ${score.ruledDays}` : '')
          + `\n• Deep clean ${score.deepClean}`;
   }
   await sendMessage(OWNER_CHAT_ID, msg);
