@@ -493,13 +493,20 @@ export async function buildKitchenContext() {
     const t = new Date(e.clockIn).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
     return `${nameFor(e.employeeId, e.employeeName)} (since ${t}, ${fmtH(entryMins(e, 0))})`;
   });
+  // A shift auto-closed at the 22:00 cut-off has a PLACEHOLDER finish, not a
+  // real one — the person forgot to clock out. Totals that include one are
+  // upper bounds, and the model must say so rather than report them as fact.
+  const placeholderNote = (list) => {
+    const n = list.filter(e => e.autoClockOut).length;
+    return n ? ` (includes ${n} auto-closed shift${n > 1 ? 's' : ''} with a placeholder finish — real total likely lower)` : '';
+  };
   const hoursLine = (fromMs) => employees
     .filter(emp => emp.active !== false)
     .map(emp => {
-      const mins = timeEntries
-        .filter(e => e.employeeId === emp.id && (e.clockOut ? new Date(e.clockOut).getTime() : nowMs) >= fromMs)
-        .reduce((s, e) => s + entryMins(e, fromMs), 0);
-      return mins > 0 ? `  • ${emp.name}: ${fmtH(mins)}` : null;
+      const list = timeEntries
+        .filter(e => e.employeeId === emp.id && (e.clockOut ? new Date(e.clockOut).getTime() : nowMs) >= fromMs);
+      const mins = list.reduce((s, e) => s + entryMins(e, fromMs), 0);
+      return mins > 0 ? `  • ${emp.name}: ${fmtH(mins)}${placeholderNote(list)}` : null;
     })
     .filter(Boolean);
   const monthStart = new Date(monthStartMs); // 1st 00:00 London (computed above, with the fetch window)
@@ -672,22 +679,23 @@ export async function buildKitchenContext() {
   const weeklyTargetLines = employees.filter(e => e.active !== false).map(emp => {
     const g = goalFor(emp);
     if (!g) return null;
-    const mins = timeEntries
-      .filter(e => e.employeeId === emp.id && (e.clockOut ? new Date(e.clockOut).getTime() : nowMs) >= weekStart.getTime())
-      .reduce((s, e) => s + entryMins(e, weekStart.getTime()), 0);
+    const wList = timeEntries
+      .filter(e => e.employeeId === emp.id && (e.clockOut ? new Date(e.clockOut).getTime() : nowMs) >= weekStart.getTime());
+    const mins = wList.reduce((s, e) => s + entryMins(e, weekStart.getTime()), 0);
+    const ph = placeholderNote(wList);
     if (g.kind === 'cap') {
       const cap = g.max * 60;
       const status = mins > cap ? `${fmtH(mins - cap)} OVER the ${g.max}h limit` : `${fmtH(cap - mins)} left of ${g.max}h`;
-      return `  • ${emp.name} (student): ${fmtH(mins)} of ${g.max}h — ${status}`;
+      return `  • ${emp.name} (student): ${fmtH(mins)} of ${g.max}h — ${status}${ph}`;
     }
     if (g.kind === 'range') {
       const mn = g.min * 60, mx = g.max * 60;
       const status = mins < mn ? `${fmtH(mn - mins)} below the ${g.min}h minimum` : mins > mx ? `${fmtH(mins - mx)} over the ${g.max}h maximum` : `within ${g.min}–${g.max}h target`;
-      return `  • ${emp.name} (contract ${g.min}–${g.max}h): ${fmtH(mins)} — ${status}`;
+      return `  • ${emp.name} (contract ${g.min}–${g.max}h): ${fmtH(mins)} — ${status}${ph}`;
     }
     const t = g.target * 60;
     const status = mins >= t ? `target met` : `${fmtH(t - mins)} left of ${g.target}h`;
-    return `  • ${emp.name} (target ${g.target}h): ${fmtH(mins)} — ${status}`;
+    return `  • ${emp.name} (target ${g.target}h): ${fmtH(mins)} — ${status}${ph}`;
   }).filter(Boolean);
 
   // Recent clock in/out log (last 40 shifts, newest first) — lets the agent
@@ -701,7 +709,7 @@ export async function buildKitchenContext() {
       const inStr = inT.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
       const outStr = e.clockOut ? new Date(e.clockOut).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' }) : 'still on shift';
       const dur = fmtH(entryMins(e, 0));
-      return `  • ${nameFor(e.employeeId, e.employeeName)} — ${dayStr}: ${inStr} → ${outStr} (${dur})${e.editedBy ? ' [edited]' : ''}`;
+      return `  • ${nameFor(e.employeeId, e.employeeName)} — ${dayStr}: ${inStr} → ${outStr} (${dur})${e.autoClockOut ? ' [AUTO-CLOSED — placeholder finish, forgot to clock out]' : ''}${e.editedBy ? ' [edited]' : ''}`;
     });
 
   // Explicit "clocked in today" list (exact in→out times) so reports are precise.
