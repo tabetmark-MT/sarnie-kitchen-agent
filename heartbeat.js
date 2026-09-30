@@ -53,6 +53,7 @@ const PG_CRON_EXPECTED_HOURS = {
   'backstop-debrief':        26,
   'backstop-nightly-backup': 26,
   'backstop-heartbeat':     170,
+  'backstop-push-reminders': 26,
   // Copies backstop answers out of pg_net before its 6-hour TTL deletes them.
   'harvest-agent-task-answers': 2,
 };
