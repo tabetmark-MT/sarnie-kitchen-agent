@@ -37,6 +37,7 @@ const ldnMins = (d = new Date()) => {
   return Number(p.hour) * 60 + Number(p.minute);
 };
 const minsOf = (iso) => ldnMins(new Date(iso));
+const ldnDay = (iso) => new Date(iso).toLocaleDateString('en-GB', { timeZone: LDN, weekday: 'short', day: 'numeric', month: 'short' });
 
 const WINDOW_OPEN  = 11 * 60;          // 11:00
 const WINDOW_CLOSE = 22 * 60 + 30;     // 22:30
@@ -110,8 +111,22 @@ export async function runComplianceWatch({ force = false } = {}) {
     .filter((r) => r.checklist_id === cid && (!sid || r.section_id === sid))
     .sort((a, b) => new Date(b.date) - new Date(a.date))[0] || null;
 
+  // ── 0. Hot-holding board ──
+  // A log is only written when a board item is CLOSED. Readings on the board
+  // today are real hot holding even before that, so they satisfy the nudge;
+  // and an item left open overnight is itself the problem to flag — on 29 Sep
+  // 2026 Beef sat open with three good readings and the day had no log.
+  const board = await getSetting('hh_board').catch(() => null);
+  const items = Array.isArray(board) ? board : [];
+  const readToday = items.some((it) => (it.readings || []).some((r) => r?.time && ldnDate(new Date(r.time)) === today));
+  const staleOpen = items.filter((it) => !it.outcome && it.startTime && ldnDate(new Date(it.startTime)) < today);
+  if (staleOpen.length && !fired('hh_open')) {
+    const list = staleOpen.map((it) => `${String(it.foodItem || 'item').trim()}${it.batchNumber ? ` (batch ${it.batchNumber})` : ''}, started ${ldnDay(it.startTime)} ${ldnTime(it.startTime)}`).join('; ');
+    alerts.push({ check: 'hh_open', text: `Still open on the hot-holding board: ${list}. Close it as served or discarded — until it is closed it is not recorded as a hot-holding log.` });
+  }
+
   // ── 1. Hot-holding: at least one before close ──
-  if (now >= NUDGE_AT && now < hours.closeAt && !fired('hothold') && !newest('hotholding')) {
+  if (now >= NUDGE_AT && now < hours.closeAt && !fired('hothold') && !newest('hotholding') && !readToday) {
     alerts.push({ check: 'hothold', text: `No hot-holding log yet today. At least one is required before close (${fmt(hours.closeAt)}), or today is not all-clear.` });
   }
 
@@ -171,6 +186,8 @@ export function formatComplianceWatch(r) {
   if (!r?.alerts?.length) return null;
   const lines = ['⚠️ <b>Compliance</b>', ''];
   for (const a of r.alerts) lines.push(`• ${a.text}`);
+  const at = new Date().toLocaleTimeString('en-GB', { timeZone: LDN, hour: '2-digit', minute: '2-digit' });
+  lines.push('', `<i>Source: kitchen checklists · hot-holding board · opening hours — checked ${at}</i>`);
   return lines.join('\n');
 }
 
@@ -185,6 +202,9 @@ export async function complianceScorecard(days = 7) {
   const tradingDays = dayKeys.length || 1;
   // Finished trading days under the new rule — today is still in progress.
   const ruled = dayKeys.filter((k) => k >= RULE_FROM && k < today);
+  const board = await getSetting('hh_board').catch(() => null);
+  const boardDays = new Set((Array.isArray(board) ? board : []).flatMap((it) => (it.readings || [])
+    .filter((r) => r?.time && Number(r.temp) >= 63).map((r) => ldnDate(new Date(r.time)))));
   const onDay = (k) => rows.filter((r) => ldnDate(new Date(r.date)) === k);
   const roundsOn = (k) => new Set(onDay(k).filter((r) => r.checklist_id === 'daily' && new Set(Object.entries(r.temperatures || {})
     .filter(([tid, v]) => FRIDGE_UNITS[tid] && v !== '' && v != null && !isNaN(parseFloat(v))).map(([tid]) => FRIDGE_UNITS[tid])).size === 4)
@@ -196,7 +216,10 @@ export async function complianceScorecard(days = 7) {
     closing: count('daily', 'closing'),
     hotholdingPerDay: Math.round((count('hotholding') / tradingDays) * 100) / 100,
     ruledDays: ruled.length,
-    hotholdingDaysMet: ruled.filter((k) => onDay(k).some((r) => r.checklist_id === 'hotholding')).length,
+    // Same evidence as the kitchen app's verdict: a closed log OR a probe
+    // reading on the board that day (an item left open still has readings).
+    hotholdingDaysMet: ruled.filter((k) => onDay(k).some((r) => r.checklist_id === 'hotholding')
+      || boardDays.has(k)).length,
     roundsDaysMet: ruled.filter((k) => roundsOn(k) >= 3).length,
     cookchill: count('cookchill'),
     deepClean: count('weekly'),

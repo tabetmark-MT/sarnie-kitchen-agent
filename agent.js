@@ -13,6 +13,71 @@ const SYSTEM = () => [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type
 const textOf = (resp) =>
   resp.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
 
+// ── Verify-before-send (30 Sep 2026, Mark: "double-check its work and confirm
+// which data it sourced before sending"). Every message the model WRITES — the
+// debrief, command replies, chat answers — goes through a second, separate
+// pass before it reaches Telegram. The checker sees exactly the data the
+// writer saw, may only confirm, correct or delete (never add), and must name
+// its sources from this fixed list, which is printed under the message.
+// Deterministic alerts (watchers, backups, heartbeat) are not model-written;
+// they carry their own Source line in the code that builds them.
+const SOURCES = [
+  'Kitchen checklists', 'Hot-holding board', 'Fridge temperature records', 'Probe calibration log',
+  'Clock-in records', 'Employee profiles & certificates', 'Live compliance feed', 'Compliance trends',
+  'Deliveries log', 'Allergen matrix', 'Document library', 'Audit log',
+  'SARNIE OS sales feed', 'SARNIE OS supplier catalogue', 'SARNIE OS menu performance', 'SARNIE OS costing brain',
+  'Result of the action taken',
+];
+const VERIFIER_PROMPT = `You fact-check a message before it is sent to Mark, the owner of Sarnie Social (a UK dark kitchen). The message is about food-safety compliance, staff hours and money, so a wrong number is worse than a missing one.
+
+You receive DATA (everything the writer was given) and a DRAFT. Check every claim in the DRAFT against DATA:
+- Every number, time, date, name, count, temperature, percentage and status must appear in DATA, or follow from it by simple arithmetic you can show. Recompute arithmetic yourself.
+- A claim DATA does not support: correct it if DATA gives the right value, otherwise DELETE it. Never replace it with a guess.
+- Never ADD facts, advice or topics that are not in the DRAFT.
+- Delete filler that carries no fact, risk or decision ("hope your day goes well", restating the obvious, repeating a point). Keep greeting and sign-off to a few words.
+- If DATA says a feed is unavailable or not connected, the DRAFT must not state figures from it.
+- Keep the writer's voice, order and Telegram HTML (<b>, <i> only). Do not make it longer.
+- If nothing needed changing, return the DRAFT unchanged.
+
+Then list which of the allowed sources the final text actually relies on. Call submit_verified exactly once.`;
+const VERIFY_TOOL = {
+  name: 'submit_verified',
+  description: 'Return the fact-checked message and the sources it relies on.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      verified_text: { type: 'string', description: 'The final message, corrected. No source line — that is added automatically.' },
+      sources: { type: 'array', items: { type: 'string', enum: SOURCES }, description: 'Sources the final text relies on.' },
+      corrections: { type: 'array', items: { type: 'string' }, description: 'Each change made and why (for the log; not sent).' },
+    },
+    required: ['verified_text', 'sources', 'corrections'],
+  },
+};
+const ldnHM = () => new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
+
+export async function verifyAndCite(draft, data, purpose) {
+  if (!draft) return draft;
+  try {
+    const resp = await claude.messages.create({
+      model: 'claude-opus-4-8',
+      max_tokens: 8000,
+      system: [{ type: 'text', text: VERIFIER_PROMPT }],
+      tools: [VERIFY_TOOL],
+      tool_choice: { type: 'tool', name: 'submit_verified' },
+      messages: [{ role: 'user', content: `PURPOSE: ${purpose}\n\nDATA:\n${data}\n\nDRAFT:\n${draft}` }],
+    });
+    const out = resp.content.find((b) => b.type === 'tool_use')?.input;
+    if (!out?.verified_text) throw new Error('checker returned no text');
+    if (out.corrections?.length) console.log(`[verify] ${purpose}: ${out.corrections.length} correction(s) —`, out.corrections.join(' | '));
+    const srcs = [...new Set((out.sources || []).filter((x) => SOURCES.includes(x)))];
+    return `${out.verified_text.trim()}\n\n<i>Source: ${srcs.length ? srcs.join(' · ') : 'no kitchen data (general answer)'} — checked ${ldnHM()}</i>`;
+  } catch (e) {
+    // Never send an unchecked message as if it were checked.
+    console.error(`[verify] ${purpose} failed:`, e.message);
+    return `${draft}\n\n<i>⚠️ Not fact-checked — the checker failed (${String(e.message).slice(0, 80)}). Treat figures with care.</i>`;
+  }
+}
+
 // ── Write tools: onboard team members. The agent must CONFIRM the details with
 // the user (in a message) before calling these; see the ONBOARDING section of
 // the system prompt. Gated upstream to the owner (Telegram) / admins (in-app).
@@ -325,7 +390,7 @@ ${context}`,
     }],
   });
 
-  return textOf(msg);
+  return verifyAndCite(textOf(msg), context, 'morning debrief');
 }
 
 // ── Handle a free-text message, with conversation memory + write tools ──────
@@ -348,6 +413,7 @@ export async function handleMessage(userText, userName, history = []) {
                  { role: 'user', content: String(userText) }].slice(-10);
 
   // Tool-use loop: the model may ask for details, confirm, then call a tool.
+  const toolLog = [];
   for (let hop = 0; hop < 6; hop++) {
     const resp = await claude.messages.create({
       model: 'claude-opus-4-8',
@@ -363,13 +429,16 @@ export async function handleMessage(userText, userName, history = []) {
       for (const block of resp.content) {
         if (block.type === 'tool_use') {
           const out = await runTool(block.name, block.input, convo);
+          toolLog.push(`${block.name} → ${JSON.stringify(out)}`);
           results.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(out) });
         }
       }
       messages.push({ role: 'user', content: results });
       continue; // let the model narrate the result
     }
-    return textOf(resp) || 'Done.';
+    const draft = textOf(resp) || 'Done.';
+    const data = `${context}${toolLog.length ? `\n\nRESULT OF THE ACTION TAKEN:\n${toolLog.join('\n')}` : ''}\n\nWHAT ${userName} ASKED: ${userText}`;
+    return verifyAndCite(draft, data, 'reply to a message');
   }
   return 'That took more steps than expected — please try again.';
 }
@@ -383,7 +452,7 @@ export async function handleCommand(command, userName) {
     '/daily':     `Give ${userName} the conversational DAILY REPORT from your instructions — cleaning, food safety, deliveries, allergens, team — as if you're his right hand giving him the rundown, not a form. Weave the numbers into natural sentences, skip empty areas, end with the one thing that matters. Use the data below.\n${context}`,
     '/report':    `Give ${userName} a quick, natural status read for today — the key numbers per area in a sentence or two each, then the one thing that matters most. Conversational, not a template. Data:\n${context}`,
     '/yesterday': `Summarise what happened yesterday in the kitchen based on this data:\n${context}`,
-    '/temps':     `List all temperature readings from today and yesterday. Flag any that are out of range (hot holding <63°C, fridge >8°C). Data:\n${context}`,
+    '/temps':     `List today's and yesterday's temperature readings: fridges from the checklist rounds, hot holding from the HOT-HOLDING BOARD block (item, times, °C, outcome). Quote them exactly as given — never estimate. Flag anything out of range (hot holding <63°C, fridge >8°C) and any hot-holding item the board marks ⚠. If a block has no readings, say so. Data:\n${context}`,
     '/staff':     `Who has been active in the kitchen today? What did they complete? Data:\n${context}`,
     '/overdue':   `What checklists or tasks are overdue or missed? Be specific. Data:\n${context}`,
     '/eho':       `Give ${userName} the EHO-readiness rundown. Use the EHO READINESS block in the data VERBATIM — lead with the overall line, then each area on its own line with its colour dot (🟢 green / 🟡 amber / 🔴 red) and the one-line detail, then the flags needing attention now (or "all clear ✅"). Do NOT recompute or re-colour anything — mirror the feed exactly, just in your voice. Data:\n${context}`,
@@ -400,5 +469,7 @@ export async function handleCommand(command, userName) {
     messages: [{ role: 'user', content: prompt }],
   });
 
-  return textOf(msg);
+  // /start and /help describe the bot itself — no kitchen data to check.
+  if (command === '/start' || command === '/help') return textOf(msg);
+  return verifyAndCite(textOf(msg), context, `${command} command`);
 }

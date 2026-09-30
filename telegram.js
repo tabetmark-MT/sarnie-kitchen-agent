@@ -76,3 +76,11 @@ export function parseUpdate(body) {
     command:  msg.text?.startsWith('/') ? msg.text.split(' ')[0].toLowerCase() : null,
   };
 }
+
+
+// Source footer for alerts the CODE builds (not the model): names where the
+// facts came from and when they were read, so every message can be traced.
+export function src(label) {
+  const at = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
+  return `\n\n<i>Source: ${label} — ${at}</i>`;
+}

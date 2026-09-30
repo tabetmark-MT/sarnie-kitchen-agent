@@ -894,6 +894,43 @@ EHO READINESS: live compliance feed unavailable right now — if asked, say the 
   const pendingPoint = !hasIce ? 'ice-water (0°C)' : !hasBoil ? 'boiling-water (100°C)' : null;
   const calDue = !bothPoints; // due until both points are done this week
 
+  // ── Hot-holding BOARD (the live source) ──
+  // Hot holding is a board in the app: an item is STARTED, probed through
+  // service, and only becomes a 'hotholding' completion when it is CLOSED as
+  // served/discarded. So completions alone undercount — an item left open (as
+  // Beef was on 29 Sep 2026) has real readings and no log. Until this block the
+  // model only ever saw a COUNT, and /temps asked it to list readings it had
+  // never been given. Every reading below is verbatim from the board.
+  const board = Array.isArray(settings.hh_board) ? settings.hh_board : [];
+  const hhT = (iso) => new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
+  const hhD = (iso) => new Date(iso).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/London' });
+  const since2d = ldnMidnight(1).getTime();
+  const hhItems = board.filter(it => {
+    const st = new Date(it.startTime || it.readings?.[0]?.time || 0).getTime();
+    return st >= since2d || !it.outcome;
+  }).sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+  const hhLines = hhItems.map(it => {
+    const rs = (it.readings || []).filter(r => r && r.time);
+    const start = it.startTime || rs[0]?.time;
+    const end = it.outcomeTime || null;
+    const heldMin = Math.round(((end ? new Date(end) : new Date()) - new Date(start)) / 60000);
+    let maxGap = 0;
+    for (let i = 1; i < rs.length; i++) maxGap = Math.max(maxGap, (new Date(rs[i].time) - new Date(rs[i - 1].time)) / 60000);
+    const lastToEnd = end && rs.length ? (new Date(end) - new Date(rs[rs.length - 1].time)) / 60000 : 0;
+    const below = rs.filter(r => Number(r.temp) < 63);
+    const notes = [];
+    if (!it.outcome) notes.push(heldMin > 720 ? `STILL OPEN on the board after ${Math.floor(heldMin / 60)}h — never closed, so it has NOT been logged as a hot-holding record` : 'open (in progress)');
+    if (below.length) notes.push(`${below.length} reading(s) BELOW 63°C`);
+    if (heldMin > 240 && it.outcome) notes.push(`held ${Math.floor(heldMin / 60)}h${heldMin % 60}m — over the 4-hour policy`);
+    if (Math.max(maxGap, lastToEnd) > 120) notes.push(`gap of ${Math.round(Math.max(maxGap, lastToEnd))} min without a probe (policy: every 2h)`);
+    return `  • ${hhD(start)} — ${String(it.foodItem || '?').trim()}${it.batchNumber ? ` (batch ${it.batchNumber})` : ''}: `
+      + rs.map(r => `${hhT(r.time)} ${r.temp}°C${r.type ? ` ${r.type}` : ''}${r.signedByName ? ` by ${r.signedByName}` : ''}`).join(', ')
+      + ` → ${it.outcome ? `${it.outcome} ${hhT(end)}` : 'no outcome yet'}${notes.length ? `  ⚠ ${notes.join('; ')}` : ''}`;
+  });
+  const hotHoldBlock = `
+HOT-HOLDING BOARD (verbatim from the app's hot-holding board — today, yesterday, and anything still open; policy on file: hold ≥63°C, probe every 2 hours, discard after 4 hours total). A hot-holding LOG only exists once an item is closed with an outcome; the readings below are the ground truth for temperatures:
+${hhLines.length ? hhLines.join('\n') : '  • No hot-holding items today or yesterday'}`;
+
   const kpiBlock = `
 KPI SNAPSHOT (today — computed, use these for clean reports):
   🧹 CLEANING — Opening: ${secMark('opening')}; Service/During: ${secMark('during')}; Closing: ${secMark('closing')}
@@ -975,7 +1012,7 @@ COMPLIANCE TRENDS (rolling, computed):
     return `  • ${name}: ${passRate}% pass (${n} readings, avg ${avg}°C, latest ${latest}°C${ampm}${fails ? `, ${fails} FAIL` : ''}${warns ? `, ${warns} warn` : ''})${drift}`;
   }).sort();
   const fridgeBlock = `
-FRIDGE TEMPERATURE ANALYTICS (last 30 days, per appliance — fridge temps are recorded TWICE daily: morning in the Opening check and evening in the Closing check; FSA limit ≤5°C, ≤8°C tolerable, >8°C = fail). There is a dedicated Fridge Temperature report in the app (Reports → Fridges) and it's also included in the EHO Records Pack:
+FRIDGE TEMPERATURE ANALYTICS (last 30 days, per appliance — fridge temps are recorded THREE times daily: the Opening, During Service and Closing checks (the Service round started 26 Sep 2026; before that it was twice); FSA limit ≤5°C, ≤8°C tolerable, >8°C = fail). There is a dedicated Fridge Temperature report in the app (Reports → Fridges) and it's also included in the EHO Records Pack:
 ${fridgeLines.length ? fridgeLines.join('\n') : '  • No fridge temperatures logged in the last 30 days'}`;
 
   // ── KPI dashboard: this week vs last (mirrors the in-app dashboard) ──
@@ -1056,6 +1093,7 @@ ${docs.length ? Object.entries(byCat).map(([cat, titles]) => `  • ${cat} (${ti
 TODAY: ${today} — right now it is ${nowLdn} (Europe/London; every time below is London time)
 ${tradingBlock}
 ${kpiBlock}
+${hotHoldBlock}
 
 ACTIVE STAFF: ${users.map(u => `${u.name} (${u.role})`).join(', ')}
 

@@ -1,7 +1,7 @@
 import express from 'express';
 import { timingSafeEqual, createHash } from 'node:crypto';
 import cron    from 'node-cron';
-import { sendMessage, sendChatAction, setWebhook, parseUpdate } from './telegram.js';
+import { sendMessage, sendChatAction, setWebhook, parseUpdate, src } from './telegram.js';
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
 import { runNightlyBackup, formatBackupResult } from './backup.js';
 import { runInAppSnapshot, formatSnapshotResult } from './snapshot.js';
@@ -144,7 +144,7 @@ async function runAutoClockOutAndNotify() {
   try {
     const result = await runAutoClockOut();
     const msg = formatAutoClockOut(result);
-    if (msg) await sendMessage(OWNER_CHAT_ID, msg);
+    if (msg) await sendMessage(OWNER_CHAT_ID, msg + src('clock-in records'));
     if (result.closed.length) console.log(`[AutoClockOut] closed ${result.closed.length} shift(s)`);
     return result;
   } catch (err) {
@@ -167,7 +167,7 @@ async function runSnapshotAndNotify() {
     console.error('[Snapshot] failed:', err.message);
     await sendMessage(OWNER_CHAT_ID,
       `⚠️ <b>In-app restore point failed</b>\n\n${err.message}\n\n`
-      + `<b>The off-site Dropbox backup is separate and unaffected.</b>`);
+      + `<b>The off-site Dropbox backup is separate and unaffected.</b>` + src('in-app snapshot job'));
     return { ok: false, error: err.message };
   }
 }
@@ -180,14 +180,14 @@ async function runStorageBackupAndNotify() {
   try {
     const result = await runStorageBackup();
     const msg = formatStorageBackup(result);
-    if (msg) await sendMessage(OWNER_CHAT_ID, msg);
+    if (msg) await sendMessage(OWNER_CHAT_ID, msg + src('document backup job (Storage → Dropbox)'));
     if (!result.skipped) console.log('[StorageBackup]', { uploaded: result.uploaded, skipped: result.skipped, failed: result.failed?.length });
     return result;
   } catch (err) {
     console.error('[StorageBackup] failed:', err.message);
     await sendMessage(OWNER_CHAT_ID,
       `⚠️ <b>Document backup failed</b>\n\n${err.message}\n\n`
-      + `<b>The table backup is separate and unaffected.</b>`);
+      + `<b>The table backup is separate and unaffected.</b>` + src('document backup job (Storage → Dropbox)'));
     return { ok: false, error: err.message };
   }
 }
@@ -201,13 +201,13 @@ async function triggerBackup(res) {
     // Stay silent when another scheduler already backed up today (de-dup), and
     // when Dropbox simply isn't configured yet. Only notify on a real backup/error.
     if (!result.skipped && (result.ok || !/not configured/.test(result.reason || ''))) {
-      await sendMessage(OWNER_CHAT_ID, formatBackupResult(result));
+      await sendMessage(OWNER_CHAT_ID, formatBackupResult(result) + src('nightly backup job (database → Dropbox)'));
     }
     res.json(result);
   } catch (err) {
     const detail = err.cause ? ` (${err.cause.code || err.cause})` : '';
     console.error('[Backup endpoint] failed:', err.message, detail);
-    await sendMessage(OWNER_CHAT_ID, `⚠️ Nightly Dropbox backup failed: ${err.message}${detail}`);
+    await sendMessage(OWNER_CHAT_ID, `⚠️ Nightly Dropbox backup failed: ${err.message}${detail}` + src('nightly backup job (database → Dropbox)'));
     res.status(500).json({ ok: false, error: err.message + detail });
   }
 }
@@ -246,9 +246,9 @@ async function runRiskCheck() {
     const msg = `⚠️ <b>Heads up Mark</b> — new compliance flag${newFlags.length > 1 ? 's' : ''} just now:\n`
       + newFlags.map(f => `• ${f}`).join('\n')
       + `\n\n<b>Overall:</b> ${snap.summary}`;
-    await sendMessage(OWNER_CHAT_ID, msg);
+    await sendMessage(OWNER_CHAT_ID, msg + src('live compliance feed (kitchen app)'));
   } else if (cleared) {
-    await sendMessage(OWNER_CHAT_ID, '✅ All compliance flags cleared — you\'re green again.');
+    await sendMessage(OWNER_CHAT_ID, '✅ All compliance flags cleared — you\'re green again.' + src('live compliance feed (kitchen app)'));
   }
   await upsertSetting('last_risk_flags', flags);
   await markRun('riskcheck');
@@ -300,7 +300,7 @@ async function runBackupWatch() {
   await markRun('backup_watch');
   if (state === 'ok') {
     if (prev && prev !== 'ok') {
-      await sendMessage(OWNER_CHAT_ID, '✅ In-app backup is running again — a fresh snapshot landed.');
+      await sendMessage(OWNER_CHAT_ID, '✅ In-app backup is running again — a fresh snapshot landed.' + src('restore-point history'));
     }
     await upsertSetting('last_backup_watch', 'ok');
     return { ok: true, ageH: Number(ageH.toFixed(1)) };
@@ -320,7 +320,7 @@ async function runBackupWatch() {
     : `⚠️ <b>Restore point is incomplete</b>\n\nThe snapshot from ${when} saved only part of the audit log — `
       + `that means it came from a browser rather than the nightly job.\n\n<b>The off-site Dropbox backup is unaffected.</b>`;
 
-  await sendMessage(OWNER_CHAT_ID, msg);
+  await sendMessage(OWNER_CHAT_ID, msg + src('restore-point history'));
   await upsertSetting('last_backup_watch', state);
   return { ok: true, alerted: state, ageH: Number(ageH.toFixed(1)) };
 }
@@ -365,7 +365,7 @@ async function runDayWatch() {
     const n = await runClockoutNudge();
     out.clockoutNudge = n.skipped ? { skipped: n.skipped } : { open: n.open ?? 0 };
     const msg = formatClockoutNudge(n);
-    if (msg) await sendMessage(OWNER_CHAT_ID, msg);
+    if (msg) await sendMessage(OWNER_CHAT_ID, msg + src('clock-in records'));
   } catch (e) {
     console.error('[ClockoutNudge] failed:', e.message);
     out.clockoutNudge = { error: e.message };
@@ -400,7 +400,7 @@ async function runHeartbeatAndSend({ force = false } = {}) {
          + (score.ruledDays ? `\n• Since 26 Sep: hot-holding met on ${score.hotholdingDaysMet} of ${score.ruledDays} days · 3 temperature rounds met on ${score.roundsDaysMet} of ${score.ruledDays}` : '')
          + `\n• Deep clean ${score.deepClean}`;
   }
-  await sendMessage(OWNER_CHAT_ID, msg);
+  await sendMessage(OWNER_CHAT_ID, msg + src('job run records (agent + database scheduler) · clock-in records · kitchen checklists · hot-holding board'));
   return { ok: true, stale: r.stale.length, healthy: r.healthy.length };
 }
 
@@ -588,11 +588,11 @@ cron.schedule(`${BACKUP_MINUTE} ${BACKUP_HOUR} * * *`, async () => {
     console.log('[Cron] Backup:', result.skipped ? '↩︎ already done today' : result.ok ? `✅ ${result.path}` : `⚠️ ${result.reason}`);
     // Stay silent if already done today (another scheduler) or not configured.
     if (!result.skipped && (result.ok || !/not configured/.test(result.reason || ''))) {
-      await sendMessage(OWNER_CHAT_ID, formatBackupResult(result));
+      await sendMessage(OWNER_CHAT_ID, formatBackupResult(result) + src('nightly backup job (database → Dropbox)'));
     }
   } catch (err) {
     console.error('[Cron] Nightly backup failed:', err.message);
-    await sendMessage(OWNER_CHAT_ID, `⚠️ Nightly Dropbox backup failed: ${err.message}`);
+    await sendMessage(OWNER_CHAT_ID, `⚠️ Nightly Dropbox backup failed: ${err.message}` + src('nightly backup job (database → Dropbox)'));
   }
 }, { timezone: 'Europe/London' });
 
