@@ -125,6 +125,42 @@ export async function runComplianceWatch({ force = false } = {}) {
     alerts.push({ check: 'hh_open', text: `Still open on the hot-holding board: ${list}. Close it as served or discarded — until it is closed it is not recorded as a hot-holding log.` });
   }
 
+  // ── 0b. Hot-holding POLICY, live (Mark, 30 Sep 2026: keep the written HACCP
+  // rule — probe every 2 hours, discard after 4 hours total). Every Beef batch
+  // 21–29 Sep was served after 4–9.6 hours, often on two readings, so this
+  // warns while it can still be acted on, and flags a breach once after close.
+  // Only items started today: yesterday's history is not re-litigated daily.
+  // The watcher runs hourly, so a warning can arrive up to an hour after the
+  // moment it describes — the text gives the exact time from the board.
+  const nowMs = Date.now();
+  const startedToday = items.filter((it) => it.startTime && ldnDate(new Date(it.startTime)) === today);
+  for (const it of startedToday) {
+    const name = `${String(it.foodItem || 'Item').trim()}${it.batchNumber ? ` (batch ${it.batchNumber})` : ''}`;
+    const rs = (it.readings || []).filter((r) => r?.time).sort((a, b) => new Date(a.time) - new Date(b.time));
+    const startMs = new Date(it.startTime).getTime();
+    const limitMs = startMs + 4 * 3600000;
+    const id = it.id || it.startTime;
+    if (!it.outcome) {
+      const last = rs[rs.length - 1];
+      const since = last ? (nowMs - new Date(last.time).getTime()) / 60000 : null;
+      if (nowMs >= limitMs && !fired(`hh4h_${id}`)) {
+        alerts.push({ check: `hh4h_${id}`, text: `${name} on the hot-holding board started ${ldnTime(it.startTime)} — the 4-hour limit was reached at ${ldnTime(new Date(limitMs).toISOString())}. Discard it and close it on the board as discarded.` });
+      } else if (last && since > 120 && !fired(`hh2h_${id}_${last.time}`)) {
+        alerts.push({ check: `hh2h_${id}_${last.time}`, text: `${name}: last probe ${ldnTime(last.time)} (${last.temp}°C), ${Math.floor(since / 60)}h${String(Math.round(since % 60)).padStart(2, '0')}m ago. A probe is due every 2 hours.` });
+      }
+    } else if (!fired(`hhbreach_${id}`)) {
+      const endMs = new Date(it.outcomeTime).getTime();
+      const heldMin = Math.round((endMs - startMs) / 60000);
+      let gap = 0;
+      const pts = [...rs.map((r) => new Date(r.time).getTime()), endMs];
+      for (let i = 1; i < pts.length; i++) gap = Math.max(gap, (pts[i] - pts[i - 1]) / 60000);
+      const why = [];
+      if (it.outcome === 'served' && heldMin > 240) why.push(`served after ${Math.floor(heldMin / 60)}h${String(heldMin % 60).padStart(2, '0')}m (limit 4h)`);
+      if (gap > 120) why.push(`${Math.floor(gap / 60)}h${String(Math.round(gap % 60)).padStart(2, '0')}m without a probe (every 2h)`);
+      if (why.length) alerts.push({ check: `hhbreach_${id}`, text: `Hot-holding policy not met — ${name}, started ${ldnTime(it.startTime)}: ${why.join('; ')}.` });
+    }
+  }
+
   // ── 1. Hot-holding: at least one before close ──
   if (now >= NUDGE_AT && now < hours.closeAt && !fired('hothold') && !newest('hotholding') && !readToday) {
     alerts.push({ check: 'hothold', text: `No hot-holding log yet today. At least one is required before close (${fmt(hours.closeAt)}), or today is not all-clear.` });
