@@ -2,6 +2,8 @@ import express from 'express';
 import { timingSafeEqual, createHash } from 'node:crypto';
 import cron    from 'node-cron';
 import { sendMessage, sendChatAction, setWebhook, parseUpdate, src } from './telegram.js';
+import { sendPush, ensureVapid } from './push.js';
+import { runPushReminders } from './pushReminders.js';
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
 import { runNightlyBackup, formatBackupResult } from './backup.js';
 import { runInAppSnapshot, formatSnapshotResult } from './snapshot.js';
@@ -255,6 +257,11 @@ async function runRiskCheck() {
   return { ok: true, newFlags, total: flags.length };
 }
 
+task('push-reminders', async (req, res) => {
+  try { res.json(await runPushReminders()); }
+  catch (e) { console.error('[PushReminders] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
+});
+
 task('risk-check', async (req, res) => {
   try { res.json(await runRiskCheck()); }
   catch (e) { console.error('[RiskCheck] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
@@ -354,6 +361,13 @@ async function runDayWatch() {
     if (msg) {
       await sendMessage(OWNER_CHAT_ID, msg);
       await markComplianceAlerted(c.state, c.today, c.alerts.map(a => a.check));
+      // Hot-holding warnings also go to the kitchen's own devices — the people
+      // who can probe or discard, at the moment it matters, not just Mark.
+      const hh = c.alerts.filter(a => /^hh/.test(a.check));
+      for (const a of hh) {
+        await sendPush({ title: '🌡️ Hot holding', body: a.text.replace(/<[^>]+>/g, ''), url: '/hotholding', tag: a.check, requireInteraction: true })
+          .catch(e => console.error('[Push] hot-hold alert failed:', e.message));
+      }
     }
   } catch (e) {
     console.error('[ComplianceWatch] failed:', e.message);
@@ -420,6 +434,10 @@ task('heartbeat', async (req, res) => {
 // Backup in-process poll every 30 min (fires when awake; the GitHub Actions ping
 // guarantees it runs even when the free Render instance is asleep).
 cron.schedule('*/30 * * * *', () => { runRiskCheck().catch(e => console.error('[RiskCheck cron]', e.message)); }, { timezone: 'Europe/London' });
+// Push reminders — every minute 06:00–22:59 London. Kept awake 05:00–22:50 by
+// the wake-kitchen-agent pg_cron; a backstop pg_cron call covers any gap, and
+// the 15-minute catch-up window in pushReminders.js absorbs a missed minute.
+cron.schedule('* 6-22 * * *', () => { runPushReminders().catch(e => console.error('[PushReminders cron]', e.message)); }, { timezone: 'Europe/London' });
 
 // Backup watch once a morning, not every 30 minutes: "no snapshot yesterday" is
 // a daily fact, and by 09:15 the night is settled and the instance is awake
@@ -483,6 +501,24 @@ app.post('/chat', async (req, res) => {
   } catch (err) {
     console.error('[Chat] error:', err.message);
     res.status(500).json({ error: 'Something went wrong. Try again.' });
+  }
+});
+
+// "Send a test to my devices" from the app. Any signed-in user; it only ever
+// reaches THEIR OWN registered devices, so it can't be used to spam the kitchen.
+app.options('/push/test', (req, res) => { chatCors(res); res.sendStatus(204); });
+app.post('/push/test', async (req, res) => {
+  chatCors(res);
+  try {
+    const { token } = req.body || {};
+    const { data, error } = await supabase.auth.getUser(token || '');
+    if (error || !data?.user) return res.status(401).json({ error: 'Please sign in again.' });
+    const at = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
+    const r = await sendPush({ title: '🔔 Sarnie Social test', body: `Notifications are working on this device (sent ${at}).`, url: '/', tag: 'test' }, { userId: data.user.id });
+    res.json(r);
+  } catch (err) {
+    console.error('[Push test] error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -598,6 +634,7 @@ cron.schedule(`${BACKUP_MINUTE} ${BACKUP_HOUR} * * *`, async () => {
 
 // ── Start server ──────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
+  ensureVapid().catch(e => console.error('[push] VAPID setup failed:', e.message));
   console.log(`🤖 Sarnie Kitchen Agent running on port ${PORT}`);
 
   // Register webhook with Telegram

@@ -29,6 +29,7 @@ const EXPECTED_HOURS = {
   riskcheck:         2,   // every 30 min, 07:00–22:00
   backup_watch:     26,   // daily 09:15
   clockout_nudge:   26,   // daily 21:45
+  push_reminders:   10,   // every minute 06:00–22:59; overnight gap is 7h
   compliance_watch: 14,   // hourly 11:00–22:30; the overnight gap (22:05 -> 11:05) is 13h by design
 };
 
