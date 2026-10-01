@@ -138,17 +138,11 @@ export async function runComplianceWatch({ force = false } = {}) {
     const name = `${String(it.foodItem || 'Item').trim()}${it.batchNumber ? ` (batch ${it.batchNumber})` : ''}`;
     const rs = (it.readings || []).filter((r) => r?.time).sort((a, b) => new Date(a.time) - new Date(b.time));
     const startMs = new Date(it.startTime).getTime();
-    const limitMs = startMs + 4 * 3600000;
     const id = it.id || it.startTime;
-    if (!it.outcome) {
-      const last = rs[rs.length - 1];
-      const since = last ? (nowMs - new Date(last.time).getTime()) / 60000 : null;
-      if (nowMs >= limitMs && !fired(`hh4h_${id}`)) {
-        alerts.push({ check: `hh4h_${id}`, text: `${name} on the hot-holding board started ${ldnTime(it.startTime)} — the 4-hour limit was reached at ${ldnTime(new Date(limitMs).toISOString())}. Discard it and close it on the board as discarded.` });
-      } else if (last && since > 120 && !fired(`hh2h_${id}_${last.time}`)) {
-        alerts.push({ check: `hh2h_${id}_${last.time}`, text: `${name}: last probe ${ldnTime(last.time)} (${last.temp}°C), ${Math.floor(since / 60)}h${String(Math.round(since % 60)).padStart(2, '0')}m ago. A probe is due every 2 hours.` });
-      }
-    } else if (!fired(`hhbreach_${id}`)) {
+    // Live probe-due / 4-hour warnings moved to hotHoldLive.js (every minute,
+    // 1 Oct 2026) — hourly was up to an hour late. Only the breach-after-close
+    // report stays here.
+    if (it.outcome && !fired(`hhbreach_${id}`)) {
       const endMs = new Date(it.outcomeTime).getTime();
       const heldMin = Math.round((endMs - startMs) / 60000);
       let gap = 0;

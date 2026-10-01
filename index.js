@@ -4,6 +4,7 @@ import cron    from 'node-cron';
 import { sendMessage, sendChatAction, setWebhook, parseUpdate, src } from './telegram.js';
 import { sendPush, ensureVapid } from './push.js';
 import { runPushReminders } from './pushReminders.js';
+import { runHotHoldLive } from './hotHoldLive.js';
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
 import { runNightlyBackup, formatBackupResult } from './backup.js';
 import { runInAppSnapshot, formatSnapshotResult } from './snapshot.js';
@@ -258,7 +259,11 @@ async function runRiskCheck() {
 }
 
 task('push-reminders', async (req, res) => {
-  try { res.json(await runPushReminders()); }
+  try {
+    const reminders = await runPushReminders();
+    const hotHold = await runHotHoldLive({ notifyOwner: (text) => sendMessage(OWNER_CHAT_ID, text + src('hot-holding board')) });
+    res.json({ ...reminders, hotHold });
+  }
   catch (e) { console.error('[PushReminders] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
 });
 
@@ -438,6 +443,9 @@ cron.schedule('*/30 * * * *', () => { runRiskCheck().catch(e => console.error('[
 // the wake-kitchen-agent pg_cron; a backstop pg_cron call covers any gap, and
 // the 15-minute catch-up window in pushReminders.js absorbs a missed minute.
 cron.schedule('* 6-22 * * *', () => { runPushReminders().catch(e => console.error('[PushReminders cron]', e.message)); }, { timezone: 'Europe/London' });
+// Live hot-holding policy (probe due / 15 min left / discard now) — every minute.
+const notifyOwner = (text) => sendMessage(OWNER_CHAT_ID, text + src('hot-holding board'));
+cron.schedule('* 6-22 * * *', () => { runHotHoldLive({ notifyOwner }).catch(e => console.error('[HotHoldLive cron]', e.message)); }, { timezone: 'Europe/London' });
 
 // Backup watch once a morning, not every 30 minutes: "no snapshot yesterday" is
 // a daily fact, and by 09:15 the night is settled and the instance is awake
