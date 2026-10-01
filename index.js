@@ -398,16 +398,19 @@ async function runDayWatch() {
   // push-reminders backstop had failed 241 times since the day before, and only
   // the weekly heartbeat would have said so. One message per failing job per day.
   try {
-    const { data: jobs, error } = await supabase.rpc('cron_job_health');
+    // Alert on the LATEST run only: a job that failed and has since recovered
+    // is not failing (cron_job_health counts failures over 48h, so it would
+    // keep reporting a fixed problem for two days).
+    const { data: jobs, error } = await supabase.rpc('cron_job_latest');
     if (error) throw new Error(error.message);
-    const failing = (jobs || []).filter(j => Number(j.recent_failures) > 0);
+    const failing = (jobs || []).filter(j => j.last_status === 'failed');
     out.cronFailing = failing.length;
     if (failing.length) {
       const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
       const st = await getWatchState('cron_fail');
       const fresh = failing.filter(j => !st[`${j.jobname}:${today}`]);
       if (fresh.length) {
-        await sendMessage(OWNER_CHAT_ID, `⚠️ <b>Scheduled job failing</b>\n\n${fresh.map(j => `• <b>${j.jobname}</b> — ${j.recent_failures} recent failure${j.recent_failures > 1 ? 's' : ''}; last success ${j.last_success ? new Date(j.last_success).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', hour: '2-digit', minute: '2-digit' }) : 'never'}`).join('\n')}` + src('database scheduler run records'));
+        await sendMessage(OWNER_CHAT_ID, `⚠️ <b>Scheduled job failing</b>\n\n${fresh.map(j => `• <b>${j.jobname}</b> — last run failed: ${String(j.last_message || '').replace(/[<>&]/g, '').slice(0, 120)}. Last success ${j.last_success ? new Date(j.last_success).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', hour: '2-digit', minute: '2-digit' }) : 'never'}`).join('\n')}` + src('database scheduler run records'));
         for (const j of fresh) st[`${j.jobname}:${today}`] = new Date().toISOString();
         await setWatchState('cron_fail', st);
       }
