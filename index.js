@@ -5,6 +5,7 @@ import { sendMessage, sendChatAction, setWebhook, parseUpdate, src } from './tel
 import { sendPush, ensureVapid } from './push.js';
 import { runPushReminders } from './pushReminders.js';
 import { runHotHoldLive } from './hotHoldLive.js';
+import { runExpiryWatch, markExpiryAlerted, formatExpiryWatch } from './expiryWatch.js';
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
 import { runNightlyBackup, formatBackupResult } from './backup.js';
 import { runInAppSnapshot, formatSnapshotResult } from './snapshot.js';
@@ -377,6 +378,20 @@ async function runDayWatch() {
   } catch (e) {
     console.error('[ComplianceWatch] failed:', e.message);
     out.compliance = { error: e.message };
+  }
+
+  // Expiry nudges — visas and certificates, 30 days / 7 days / expired, once each.
+  try {
+    const x = await runExpiryWatch();
+    out.expiry = { checked: x.checked, alerts: x.alerts.length };
+    const msg = formatExpiryWatch(x);
+    if (msg) {
+      await sendMessage(OWNER_CHAT_ID, msg + src('staff documents & right-to-work records'));
+      await markExpiryAlerted(x.state, x.alerts.map(a => a.key));
+    }
+  } catch (e) {
+    console.error('[ExpiryWatch] failed:', e.message);
+    out.expiry = { error: e.message };
   }
 
   // Clock-out nudge — 21:40–22:00 only, gated inside
