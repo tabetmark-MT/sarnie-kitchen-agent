@@ -14,7 +14,7 @@ import { runHeartbeat, formatHeartbeat, heartbeatAlreadySentThisWeek } from './h
 import { runClockoutNudge, formatClockoutNudge, autoCloseRate } from './clockoutNudge.js';
 import { runComplianceWatch, formatComplianceWatch, markComplianceAlerted, complianceScorecard } from './complianceWatch.js';
 import { runAutoClockOut, formatAutoClockOut } from './autoClockout.js';
-import { supabase, getSetting, upsertSetting, getComplianceSnapshot, markRun } from './supabase.js';
+import { supabase, getSetting, upsertSetting, getComplianceSnapshot, markRun, getWatchState, setWatchState } from './supabase.js';
 import { authorisedIntel, buildComplianceSnapshot } from './intel.js';
 
 const app  = express();
@@ -392,6 +392,29 @@ async function runDayWatch() {
   } catch (e) {
     console.error('[ExpiryWatch] failed:', e.message);
     out.expiry = { error: e.message };
+  }
+
+  // Scheduler failures — daily, not just Monday. On 1 Oct 2026 the
+  // push-reminders backstop had failed 241 times since the day before, and only
+  // the weekly heartbeat would have said so. One message per failing job per day.
+  try {
+    const { data: jobs, error } = await supabase.rpc('cron_job_health');
+    if (error) throw new Error(error.message);
+    const failing = (jobs || []).filter(j => Number(j.recent_failures) > 0);
+    out.cronFailing = failing.length;
+    if (failing.length) {
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+      const st = await getWatchState('cron_fail');
+      const fresh = failing.filter(j => !st[`${j.jobname}:${today}`]);
+      if (fresh.length) {
+        await sendMessage(OWNER_CHAT_ID, `⚠️ <b>Scheduled job failing</b>\n\n${fresh.map(j => `• <b>${j.jobname}</b> — ${j.recent_failures} recent failure${j.recent_failures > 1 ? 's' : ''}; last success ${j.last_success ? new Date(j.last_success).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', hour: '2-digit', minute: '2-digit' }) : 'never'}`).join('\n')}` + src('database scheduler run records'));
+        for (const j of fresh) st[`${j.jobname}:${today}`] = new Date().toISOString();
+        await setWatchState('cron_fail', st);
+      }
+    }
+  } catch (e) {
+    console.error('[CronFailWatch] failed:', e.message);
+    out.cronFailing = { error: e.message };
   }
 
   // Clock-out nudge — 21:40–22:00 only, gated inside
