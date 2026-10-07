@@ -175,6 +175,7 @@ export async function getAllData() {
     employee_hr: 'employee_id',
     employee_hr_private: 'employee_id',
     employee_pay: 'employee_id',
+    popup_compliance: 'event_id',
   };
   const PAGE = 1000;
   const tables = [
@@ -189,6 +190,11 @@ export async function getAllData() {
     'employee_hr', 'employee_hr_private', 'employee_hr_audit',
     // Pay rates (25 Sep 2026) — moved out of the staff list; see employee_pay.
     'employee_pay',
+    // Added 7 Oct 2026 — tables created since the list was last touched.
+    // Fitness-to-work returns (HR v3) and pop-up event compliance + temperature
+    // logs are compliance records an EHO can ask for. Like the HR tables they
+    // start empty, so they stay out of the core empty-read guard.
+    'fitness_returns', 'popup_compliance', 'popup_temp_logs',
   ];
   const out = {};
   const short = [];
