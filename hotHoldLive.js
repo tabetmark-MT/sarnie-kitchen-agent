@@ -14,6 +14,10 @@ import { getSetting, getWatchState, setWatchState } from './supabase.js';
 import { sendPush } from './push.js';
 
 const LDN = 'Europe/London';
+// Probe gaps up to 2h + this many minutes are NOT a breach (Mark, 9 Oct 2026):
+// the "probe due" push still fires at exactly 2h; the after-close "policy not
+// met" report and the bot only flag beyond 2h10m. The 4-hour discard is strict.
+export const PROBE_GRACE_MIN = 10;
 const ldnDate = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: LDN });
 const hm = (ms) => new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: LDN });
 

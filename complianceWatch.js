@@ -26,6 +26,7 @@
 // the same way the kitchen app does. On Sunday 27 Sep 2026 it sent "opening
 // checklist not signed" and "no hot-holding" with the kitchen shut, because it
 // never looked. A closed day now sends nothing.
+import { PROBE_GRACE_MIN } from './hotHoldLive.js';
 import { getCompletionsRange, getComplianceSnapshot, getWatchState, setWatchState, markRun, getSetting } from './supabase.js';
 
 const LDN = 'Europe/London';
@@ -150,7 +151,10 @@ export async function runComplianceWatch({ force = false } = {}) {
       for (let i = 1; i < pts.length; i++) gap = Math.max(gap, (pts[i] - pts[i - 1]) / 60000);
       const why = [];
       if (it.outcome === 'served' && heldMin > 240) why.push(`served after ${Math.floor(heldMin / 60)}h${String(heldMin % 60).padStart(2, '0')}m (limit 4h)`);
-      if (gap > 120) why.push(`${Math.floor(gap / 60)}h${String(Math.round(gap % 60)).padStart(2, '0')}m without a probe (every 2h)`);
+      // 10-minute grace on the 2-hour probe (Mark, 9 Oct 2026): staff still get
+      // the "probe due" push at exactly 2h, but a probe a few minutes late in a
+      // busy service is not reported as a breach. Up to 2h10m = met.
+      if (gap > 120 + PROBE_GRACE_MIN) why.push(`${Math.floor(gap / 60)}h${String(Math.round(gap % 60)).padStart(2, '0')}m without a probe (every 2h)`);
       if (why.length) alerts.push({ check: `hhbreach_${id}`, text: `Hot-holding policy not met — ${name}, started ${ldnTime(it.startTime)}: ${why.join('; ')}.` });
     }
   }

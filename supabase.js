@@ -928,7 +928,8 @@ EHO READINESS: live compliance feed unavailable right now — if asked, say the 
     if (!it.outcome) notes.push(heldMin > 720 ? `STILL OPEN on the board after ${Math.floor(heldMin / 60)}h — never closed, so it has NOT been logged as a hot-holding record` : 'open (in progress)');
     if (below.length) notes.push(`${below.length} reading(s) BELOW 63°C`);
     if (heldMin > 240 && it.outcome) notes.push(`held ${Math.floor(heldMin / 60)}h${heldMin % 60}m — over the 4-hour policy`);
-    if (Math.max(maxGap, lastToEnd) > 120) notes.push(`gap of ${Math.round(Math.max(maxGap, lastToEnd))} min without a probe (policy: every 2h)`);
+    // 10-min grace, same as the breach report (Mark, 9 Oct 2026).
+    if (Math.max(maxGap, lastToEnd) > 130) notes.push(`gap of ${Math.round(Math.max(maxGap, lastToEnd))} min without a probe (policy: every 2h, 10 min grace)`);
     return `  • ${hhD(start)} — ${String(it.foodItem || '?').trim()}${it.batchNumber ? ` (batch ${it.batchNumber})` : ''}: `
       + rs.map(r => `${hhT(r.time)} ${r.temp}°C${r.type ? ` ${r.type}` : ''}${r.signedByName ? ` by ${r.signedByName}` : ''}`).join(', ')
       + ` → ${it.outcome ? `${it.outcome} ${hhT(end)}` : 'no outcome yet'}${notes.length ? `  ⚠ ${notes.join('; ')}` : ''}`;
