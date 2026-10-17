@@ -21,6 +21,28 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 
 const OWNER_CHAT_ID   = process.env.TELEGRAM_CHAT_ID;   // 2046354154
+
+// Alert copies (Mark, 17 Oct 2026). Extra Telegram chats that receive the same
+// agent ALERTS as the owner, each until an end date — first use: Noman while
+// Mark is away 18–25 Oct. app_settings.telegram_alert_cc =
+//   [{ chatId, name, until: 'YYYY-MM-DD' }]   (inclusive, London date)
+// They get alerts only. The bot still only TALKS to the owner (see webhook).
+async function alertCcIds() {
+  try {
+    const list = await getSetting('telegram_alert_cc');
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+    return (Array.isArray(list) ? list : [])
+      .filter((c) => c && c.chatId && String(c.chatId) !== String(OWNER_CHAT_ID) && (!c.until || today <= c.until))
+      .map((c) => String(c.chatId));
+  } catch { return []; }
+}
+async function sendAlert(text) {
+  const r = await sendMessage(OWNER_CHAT_ID, text);
+  for (const id of await alertCcIds()) {
+    try { await sendMessage(id, text); } catch (e) { console.warn('[Alert cc]', id, e.message); }
+  }
+  return r;
+}
 const WEBHOOK_SECRET  = process.env.WEBHOOK_SECRET || 'sarnie-agent-secret';
 const MORNING_HOUR    = process.env.MORNING_HOUR   || '10';  // 10am — kitchen opening, when there's something to say
 const MORNING_MINUTE  = process.env.MORNING_MINUTE || '0';
@@ -148,7 +170,7 @@ async function runAutoClockOutAndNotify() {
   try {
     const result = await runAutoClockOut();
     const msg = formatAutoClockOut(result);
-    if (msg) await sendMessage(OWNER_CHAT_ID, msg + src('clock-in records'));
+    if (msg) await sendAlert(msg + src('clock-in records'));
     if (result.closed.length) console.log(`[AutoClockOut] closed ${result.closed.length} shift(s)`);
     return result;
   } catch (err) {
@@ -169,7 +191,7 @@ async function runSnapshotAndNotify() {
     return result;
   } catch (err) {
     console.error('[Snapshot] failed:', err.message);
-    await sendMessage(OWNER_CHAT_ID,
+    await sendAlert(
       `⚠️ <b>In-app restore point failed</b>\n\n${err.message}\n\n`
       + `<b>The off-site Dropbox backup is separate and unaffected.</b>` + src('in-app snapshot job'));
     return { ok: false, error: err.message };
@@ -184,12 +206,12 @@ async function runStorageBackupAndNotify() {
   try {
     const result = await runStorageBackup();
     const msg = formatStorageBackup(result);
-    if (msg) await sendMessage(OWNER_CHAT_ID, msg + src('document backup job (Storage → Dropbox)'));
+    if (msg) await sendAlert(msg + src('document backup job (Storage → Dropbox)'));
     if (!result.skipped) console.log('[StorageBackup]', { uploaded: result.uploaded, skipped: result.skipped, failed: result.failed?.length });
     return result;
   } catch (err) {
     console.error('[StorageBackup] failed:', err.message);
-    await sendMessage(OWNER_CHAT_ID,
+    await sendAlert(
       `⚠️ <b>Document backup failed</b>\n\n${err.message}\n\n`
       + `<b>The table backup is separate and unaffected.</b>` + src('document backup job (Storage → Dropbox)'));
     return { ok: false, error: err.message };
@@ -205,13 +227,13 @@ async function triggerBackup(res) {
     // Stay silent when another scheduler already backed up today (de-dup), and
     // when Dropbox simply isn't configured yet. Only notify on a real backup/error.
     if (!result.skipped && (result.ok || !/not configured/.test(result.reason || ''))) {
-      await sendMessage(OWNER_CHAT_ID, formatBackupResult(result) + src('nightly backup job (database → Dropbox)'));
+      await sendAlert(formatBackupResult(result) + src('nightly backup job (database → Dropbox)'));
     }
     res.json(result);
   } catch (err) {
     const detail = err.cause ? ` (${err.cause.code || err.cause})` : '';
     console.error('[Backup endpoint] failed:', err.message, detail);
-    await sendMessage(OWNER_CHAT_ID, `⚠️ Nightly Dropbox backup failed: ${err.message}${detail}` + src('nightly backup job (database → Dropbox)'));
+    await sendAlert(`⚠️ Nightly Dropbox backup failed: ${err.message}${detail}` + src('nightly backup job (database → Dropbox)'));
     res.status(500).json({ ok: false, error: err.message + detail });
   }
 }
@@ -250,9 +272,9 @@ async function runRiskCheck() {
     const msg = `⚠️ <b>Heads up Mark</b> — new compliance flag${newFlags.length > 1 ? 's' : ''} just now:\n`
       + newFlags.map(f => `• ${f}`).join('\n')
       + `\n\n<b>Overall:</b> ${snap.summary}`;
-    await sendMessage(OWNER_CHAT_ID, msg + src('live compliance feed (kitchen app)'));
+    await sendAlert(msg + src('live compliance feed (kitchen app)'));
   } else if (cleared) {
-    await sendMessage(OWNER_CHAT_ID, '✅ All compliance flags cleared — you\'re green again.' + src('live compliance feed (kitchen app)'));
+    await sendAlert('✅ All compliance flags cleared — you\'re green again.' + src('live compliance feed (kitchen app)'));
   }
   await upsertSetting('last_risk_flags', flags);
   await markRun('riskcheck');
@@ -262,7 +284,7 @@ async function runRiskCheck() {
 task('push-reminders', async (req, res) => {
   try {
     const reminders = await runPushReminders();
-    const hotHold = await runHotHoldLive({ notifyOwner: (text) => sendMessage(OWNER_CHAT_ID, text + src('hot-holding board')) });
+    const hotHold = await runHotHoldLive({ notifyOwner: (text) => sendAlert(text + src('hot-holding board')) });
     res.json({ ...reminders, hotHold });
   }
   catch (e) { console.error('[PushReminders] failed:', e.message); res.status(500).json({ ok: false, error: e.message }); }
@@ -313,7 +335,7 @@ async function runBackupWatch() {
   await markRun('backup_watch');
   if (state === 'ok') {
     if (prev && prev !== 'ok') {
-      await sendMessage(OWNER_CHAT_ID, '✅ In-app backup is running again — a fresh snapshot landed.' + src('restore-point history'));
+      await sendAlert('✅ In-app backup is running again — a fresh snapshot landed.' + src('restore-point history'));
     }
     await upsertSetting('last_backup_watch', 'ok');
     return { ok: true, ageH: Number(ageH.toFixed(1)) };
@@ -333,7 +355,7 @@ async function runBackupWatch() {
     : `⚠️ <b>Restore point is incomplete</b>\n\nThe snapshot from ${when} saved only part of the audit log — `
       + `that means it came from a browser rather than the nightly job.\n\n<b>The off-site Dropbox backup is unaffected.</b>`;
 
-  await sendMessage(OWNER_CHAT_ID, msg + src('restore-point history'));
+  await sendAlert(msg + src('restore-point history'));
   await upsertSetting('last_backup_watch', state);
   return { ok: true, alerted: state, ageH: Number(ageH.toFixed(1)) };
 }
@@ -365,7 +387,7 @@ async function runDayWatch() {
     out.compliance = c.skipped ? { skipped: c.skipped } : { alerts: c.alerts.length, bridge: c.bridgeReachable };
     const msg = formatComplianceWatch(c);
     if (msg) {
-      await sendMessage(OWNER_CHAT_ID, msg);
+      await sendAlert(msg);
       await markComplianceAlerted(c.state, c.today, c.alerts.map(a => a.check));
       // Hot-holding warnings also go to the kitchen's own devices — the people
       // who can probe or discard, at the moment it matters, not just Mark.
@@ -386,7 +408,7 @@ async function runDayWatch() {
     out.expiry = { checked: x.checked, alerts: x.alerts.length };
     const msg = formatExpiryWatch(x);
     if (msg) {
-      await sendMessage(OWNER_CHAT_ID, msg + src('staff documents & right-to-work records'));
+      await sendAlert(msg + src('staff documents & right-to-work records'));
       await markExpiryAlerted(x.state, x.alerts.map(a => a.key));
     }
   } catch (e) {
@@ -410,7 +432,7 @@ async function runDayWatch() {
       const st = await getWatchState('cron_fail');
       const fresh = failing.filter(j => !st[`${j.jobname}:${today}`]);
       if (fresh.length) {
-        await sendMessage(OWNER_CHAT_ID, `⚠️ <b>Scheduled job failing</b>\n\n${fresh.map(j => `• <b>${j.jobname}</b> — last run failed: ${String(j.last_message || '').replace(/[<>&]/g, '').slice(0, 120)}. Last success ${j.last_success ? new Date(j.last_success).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', hour: '2-digit', minute: '2-digit' }) : 'never'}`).join('\n')}` + src('database scheduler run records'));
+        await sendAlert(`⚠️ <b>Scheduled job failing</b>\n\n${fresh.map(j => `• <b>${j.jobname}</b> — last run failed: ${String(j.last_message || '').replace(/[<>&]/g, '').slice(0, 120)}. Last success ${j.last_success ? new Date(j.last_success).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', hour: '2-digit', minute: '2-digit' }) : 'never'}`).join('\n')}` + src('database scheduler run records'));
         for (const j of fresh) st[`${j.jobname}:${today}`] = new Date().toISOString();
         await setWatchState('cron_fail', st);
       }
@@ -425,7 +447,7 @@ async function runDayWatch() {
     const n = await runClockoutNudge();
     out.clockoutNudge = n.skipped ? { skipped: n.skipped } : { open: n.open ?? 0 };
     const msg = formatClockoutNudge(n);
-    if (msg) await sendMessage(OWNER_CHAT_ID, msg + src('clock-in records'));
+    if (msg) await sendAlert(msg + src('clock-in records'));
   } catch (e) {
     console.error('[ClockoutNudge] failed:', e.message);
     out.clockoutNudge = { error: e.message };
@@ -460,7 +482,7 @@ async function runHeartbeatAndSend({ force = false } = {}) {
          + (score.ruledDays ? `\n• Since 26 Sep: hot-holding met on ${score.hotholdingDaysMet} of ${score.ruledDays} days · 3 temperature rounds met on ${score.roundsDaysMet} of ${score.ruledDays}` : '')
          + `\n• Deep clean ${score.deepClean}`;
   }
-  await sendMessage(OWNER_CHAT_ID, msg + src('job run records (agent + database scheduler) · clock-in records · kitchen checklists · hot-holding board'));
+  await sendAlert(msg + src('job run records (agent + database scheduler) · clock-in records · kitchen checklists · hot-holding board'));
   return { ok: true, stale: r.stale.length, healthy: r.healthy.length };
 }
 
@@ -485,7 +507,7 @@ cron.schedule('*/30 * * * *', () => { runRiskCheck().catch(e => console.error('[
 // the 15-minute catch-up window in pushReminders.js absorbs a missed minute.
 cron.schedule('* 6-22 * * *', () => { runPushReminders().catch(e => console.error('[PushReminders cron]', e.message)); }, { timezone: 'Europe/London' });
 // Live hot-holding policy (probe due / 15 min left / discard now) — every minute.
-const notifyOwner = (text) => sendMessage(OWNER_CHAT_ID, text + src('hot-holding board'));
+const notifyOwner = (text) => sendAlert(text + src('hot-holding board'));
 cron.schedule('* 6-22 * * *', () => { runHotHoldLive({ notifyOwner }).catch(e => console.error('[HotHoldLive cron]', e.message)); }, { timezone: 'Europe/London' });
 
 // Backup watch once a morning, not every 30 minutes: "no snapshot yesterday" is
@@ -594,7 +616,14 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
 
   // Security — only respond to the owner
   if (String(chatId) !== String(OWNER_CHAT_ID)) {
-    await sendMessage(chatId, '⛔ Sorry, I only respond to the kitchen manager.');
+    // Remember who tried (last 20), so Mark can add someone to alert copies
+    // without anyone having to find their numeric chat id (17 Oct 2026).
+    try {
+      const seen = (await getSetting('telegram_seen_chats')) || [];
+      const rest = (Array.isArray(seen) ? seen : []).filter((c) => String(c.chatId) !== String(chatId));
+      await upsertSetting('telegram_seen_chats', [{ chatId: String(chatId), name: name || null, at: new Date().toISOString() }, ...rest].slice(0, 20));
+    } catch (e) { console.warn('[Webhook] could not record chat', e.message); }
+    await sendMessage(chatId, '⛔ Sorry, I only chat with the kitchen manager. Your chat has been noted — Mark can add you to receive kitchen alerts.');
     return;
   }
 
@@ -646,7 +675,7 @@ async function runMorningDebrief() {
   if ((await getSetting('last_debrief_date')) === todayLdn) return { skipped: true, reason: 'already sent today' };
   const report = await generateMorningDebrief();
   await markRun('debrief');
-  await sendMessage(OWNER_CHAT_ID, report);
+  await sendAlert(report);
   await upsertSetting('last_debrief_date', todayLdn);
   console.log('[Debrief] sent ✅');
   return { ok: true };
@@ -673,11 +702,11 @@ cron.schedule(`${BACKUP_MINUTE} ${BACKUP_HOUR} * * *`, async () => {
     console.log('[Cron] Backup:', result.skipped ? '↩︎ already done today' : result.ok ? `✅ ${result.path}` : `⚠️ ${result.reason}`);
     // Stay silent if already done today (another scheduler) or not configured.
     if (!result.skipped && (result.ok || !/not configured/.test(result.reason || ''))) {
-      await sendMessage(OWNER_CHAT_ID, formatBackupResult(result) + src('nightly backup job (database → Dropbox)'));
+      await sendAlert(formatBackupResult(result) + src('nightly backup job (database → Dropbox)'));
     }
   } catch (err) {
     console.error('[Cron] Nightly backup failed:', err.message);
-    await sendMessage(OWNER_CHAT_ID, `⚠️ Nightly Dropbox backup failed: ${err.message}` + src('nightly backup job (database → Dropbox)'));
+    await sendAlert(`⚠️ Nightly Dropbox backup failed: ${err.message}` + src('nightly backup job (database → Dropbox)'));
   }
 }, { timezone: 'Europe/London' });
 
