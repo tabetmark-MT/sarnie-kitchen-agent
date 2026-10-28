@@ -176,6 +176,8 @@ export async function getAllData() {
     employee_hr_private: 'employee_id',
     employee_pay: 'employee_id',
     popup_compliance: 'event_id',
+    sites: 'code',
+    site_settings: 'site',
   };
   const PAGE = 1000;
   const tables = [
@@ -195,6 +197,9 @@ export async function getAllData() {
     // logs are compliance records an EHO can ask for. Like the HR tables they
     // start empty, so they stay out of the core empty-read guard.
     'fitness_returns', 'popup_compliance', 'popup_temp_logs',
+    // Multi-site K1 (28 Oct 2026, Whitechapel): the kitchen list and the
+    // per-kitchen settings. Every row above now also carries its `site`.
+    'sites', 'site_settings',
   ];
   const out = {};
   const short = [];
