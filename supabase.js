@@ -823,7 +823,7 @@ ${activeEmps.length ? activeEmps.map(profileLine).join('\n') : '  • No active 
     const t = parseFloat(i.temp);
     if (i.type === 'ambient' || isNaN(t)) return false;
     if (i.type === 'chilled') return t > 8;
-    if (i.type === 'frozen')  return t > -18;
+    if (i.type === 'frozen')  return t > -15;
     if (i.type === 'hot')     return t < 63;
     return false;
   }).length), 0);
@@ -866,7 +866,7 @@ ${certLines.length ? certLines.join('\n') : '  • No supplier certificates on f
     const fails = (d.items || []).filter(i => {
       const t = parseFloat(i.temp);
       if (i.type === 'ambient' || isNaN(t)) return false;
-      return (i.type === 'chilled' && t > 8) || (i.type === 'frozen' && t > -18) || (i.type === 'hot' && t < 63);
+      return (i.type === 'chilled' && t > 8) || (i.type === 'frozen' && t > -15) || (i.type === 'hot' && t < 63);
     }).length;
     return `  • ${day} — ${d.supplierName || 'Unknown supplier'}: ${d.outcome || 'accepted'}, ${(d.items || []).length} item${(d.items || []).length !== 1 ? 's' : ''}${fails ? `, ${fails} TEMP FAIL${fails !== 1 ? 'S' : ''} ❌` : ''}${d.signedByName ? `, signed ${d.signedByName}` : ''}`;
   });

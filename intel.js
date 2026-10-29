@@ -161,7 +161,7 @@ export async function buildComplianceSnapshot({ from, to } = {}) {
   const deliv = (settings.delivery_log || []).filter(d => inWindow(londonKey(d.date)));
   const tempFailures = deliv.reduce((n, d) => n + ((d.items || []).filter(i => {
     const t = parseFloat(i.temp); if (i.type === 'ambient' || isNaN(t)) return false;
-    if (i.type === 'chilled') return t > 8; if (i.type === 'frozen') return t > -18; if (i.type === 'hot') return t < 63; return false;
+    if (i.type === 'chilled') return t > 8; if (i.type === 'frozen') return t > -15; if (i.type === 'hot') return t < 63; return false;
   }).length), 0);
   const deliveries = {
     count: deliv.length,
