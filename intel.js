@@ -148,7 +148,7 @@ export async function buildComplianceSnapshot({ from, to } = {}) {
     || ((await supabase.from('completions').select('*').eq('checklist_id', 'allergen_monthly').order('date', { ascending: false }).limit(1)).data || [])[0];
   const revAt = allergenRev ? new Date(allergenRev.date) : null;
   const changeLog = settings.allergen_menu?.changeLog || [];
-  const lastChange = changeLog.map(e => new Date(e.date)).sort((a, b) => b - a)[0] || null;
+  const lastChange = changeLog.filter(e => !['note', 'review', 'initial_setup'].includes(e.type)).map(e => new Date(e.date)).sort((a, b) => b - a)[0] || null;
   const changedSinceReview = !!(lastChange && (!revAt || lastChange > revAt));
   const allergen = {
     lastReviewedDaysAgo: revAt ? Math.floor((nowMs - revAt) / 86400000) : null,
