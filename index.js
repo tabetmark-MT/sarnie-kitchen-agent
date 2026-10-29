@@ -4,6 +4,7 @@ import cron    from 'node-cron';
 import { sendMessage, sendChatAction, setWebhook, parseUpdate, src } from './telegram.js';
 import { sendPush, ensureVapid } from './push.js';
 import { runPushReminders } from './pushReminders.js';
+import { runPopupPush } from './popupPush.js';
 import { runHotHoldLive } from './hotHoldLive.js';
 import { runExpiryWatch, markExpiryAlerted, formatExpiryWatch } from './expiryWatch.js';
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
@@ -520,6 +521,8 @@ cron.schedule('*/30 * * * *', () => { runRiskCheck().catch(e => console.error('[
 // the wake-kitchen-agent pg_cron; a backstop pg_cron call covers any gap, and
 // the 15-minute catch-up window in pushReminders.js absorbs a missed minute.
 cron.schedule('* 6-22 * * *', () => { runPushReminders().catch(e => console.error('[PushReminders cron]', e.message)); }, { timezone: 'Europe/London' });
+// Pop-up temperature checks — every 2 hours through each event's trading hours (SARNIE OS).
+cron.schedule('* 6-22 * * *', () => { runPopupPush().catch(e => console.error('[PopupPush cron]', e.message)); }, { timezone: 'Europe/London' });
 // Live hot-holding policy (probe due / 15 min left / discard now) — every minute.
 const notifyOwner = (text) => sendAlert(text + src('hot-holding board'));
 cron.schedule('* 6-22 * * *', () => { runHotHoldLive({ notifyOwner }).catch(e => console.error('[HotHoldLive cron]', e.message)); }, { timezone: 'Europe/London' });
