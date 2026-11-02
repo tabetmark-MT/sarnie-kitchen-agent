@@ -14,6 +14,8 @@ import { sendPush } from './push.js';
 
 const LDN = 'Europe/London';
 const OS_POPUPS = 'https://sarnie-inventory-app.vercel.app/api/popups';
+// Feed contract (2 Nov 2026): every call into SARNIE OS names the kitchen.
+const withSite = (u) => `${u}${u.includes('?') ? '&' : '?'}site=SS-ISL`;
 const SLOT_MIN = 120;
 const CATCH_UP_MIN = 15;
 const toMin = (hhmm) => { const [h, m] = String(hhmm || '').split(':').map(Number); return (h || 0) * 60 + (m || 0); };
@@ -24,7 +26,7 @@ async function popups() {
   if (Date.now() - cache.at < 10 * 60000) return cache.popups;
   const token = process.env.SUPPLIER_FEED_TOKEN || await getSetting('sarnie_supplier_feed_token');
   if (!token) throw new Error('pop-ups feed token not configured');
-  const r = await fetch(OS_POPUPS, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+  const r = await fetch(withSite(OS_POPUPS), { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
   if (!r.ok) throw new Error(`pop-ups feed HTTP ${r.status}`);
   const j = await r.json();
   cache = { at: Date.now(), popups: Array.isArray(j.popups) ? j.popups : [] };

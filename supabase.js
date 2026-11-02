@@ -403,7 +403,8 @@ async function getLiveCatalog() {
     const url = process.env.SUPPLIER_FEED_URL || (await getSetting('sarnie_suppliers_url')) || 'https://sarnie-inventory-app.vercel.app/api/suppliers';
     const token = process.env.SUPPLIER_FEED_TOKEN || (await getSetting('sarnie_supplier_feed_token'));
     if (!token) return null;
-    const res = await fetch(url, {
+    // Feed contract (2 Nov 2026): every feed call names the kitchen.
+    const res = await fetch(`${url}${url.includes('?') ? '&' : '?'}site=SS-ISL`, {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       signal: AbortSignal.timeout(8000),
     });
@@ -421,7 +422,8 @@ export async function getComplianceSnapshot() {
     const url = process.env.KITCHEN_COMPLIANCE_URL || (await getSetting('kitchen_compliance_url')) || 'https://sarnie-kitchen-app.vercel.app/api/compliance';
     const token = process.env.KITCHEN_COMPLIANCE_TOKEN || (await getSetting('kitchen_compliance_token'));
     if (!token) return null;
-    const res = await fetch(url, {
+    // Feed contract (2 Nov 2026): every feed call names the kitchen.
+    const res = await fetch(`${url}${url.includes('?') ? '&' : '?'}site=SS-ISL`, {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       signal: AbortSignal.timeout(8000),
     });

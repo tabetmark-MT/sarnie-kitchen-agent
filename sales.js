@@ -22,6 +22,8 @@
 import { getSetting } from './supabase.js';
 
 const DEFAULT_URL = 'https://sarnie-inventory-app.vercel.app/api/sales';
+// Feed contract (2 Nov 2026): every call into SARNIE OS names the kitchen.
+const withSite = (u) => `${u}${u.includes('?') ? '&' : '?'}site=SS-ISL`;
 const SHARED_TOKEN = 'sarnie_supplier_feed_token'; // app_settings key
 
 // Reporting baseline: the date from which sales/labour reporting is considered
@@ -71,7 +73,7 @@ export async function fetchSales({ force = false } = {}) {
       (await getSetting(SHARED_TOKEN));
     if (!token) return null;
 
-    const res = await fetch(url, {
+    const res = await fetch(withSite(url), {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       signal: AbortSignal.timeout(12000),
     });
