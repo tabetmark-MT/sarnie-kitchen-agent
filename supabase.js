@@ -1160,7 +1160,7 @@ async function labourPlanBlock() {
     const pr = (label, p) => (p ? `${label}: ${p.pct}% (${g(p.cost)}) — ${String(p.status).toUpperCase()}${p.hoursToCut > 0 ? ` · cut ${p.hoursToCut}h to reach the top of the band` : ''}${p.hoursAvailable > 0 ? ` · ${p.hoursAvailable}h still available in band` : ''}` : `${label}: not available`);
     const t = d.target || {}, b = d.budget || {}, a = d.actual || {}, sl = d.sales || {};
     return `\nLABOUR PLAN (live from SARNIE OS, week ${d.week?.id || '?'} — the ONLY source for labour %; quote these numbers, never recompute):
-  Target band: ${t.minPct}–${t.maxPct}% of ${d.basis || 'sales before commission, ex-VAT'}.
+  Target band: ${t.minPct}–${t.maxPct}% of ${d.definition || d.basis || 'sales before commission, ex-VAT'}.
   Sales: ${g(sl.actualToDate)} to date + ${g(sl.forecastRemaining)} forecast = ${g(sl.projected)} projected.
   Actual so far: ${g(a.cost)}, ${a.hours}h, ${a.pct}%.
   ${pr('On pace', d.projected?.onPace)}
