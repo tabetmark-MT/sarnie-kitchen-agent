@@ -1,5 +1,5 @@
 // Labour band watch (Mark, 2 Nov 2026: "make sure our forecasting and target
-// stay in the range 18–25"). Two jobs, both reading SARNIE OS's labour plan —
+// stay in the range 18–25"; widened to 18–28% the same evening). The band itself is read from the OS. Two jobs, both reading SARNIE OS's labour plan —
 // the one projection both apps show (contract v2) — never a local estimate:
 //
 //  1. runLabourWatch() — from the day watch, hourly 11:00–22:00. Telegrams

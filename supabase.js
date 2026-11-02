@@ -1143,7 +1143,7 @@ ${audit.slice(0, 10).map(a => `  • ${new Date(a.timestamp).toLocaleString('en-
 
 
 // LABOUR PLAN (labour projection contract v2, approved by Mark 2 Nov 2026).
-// SARNIE OS owns sales, the band (18–25% today, editable in the OS) and the
+// SARNIE OS owns sales, the band (18–28% since 2 Nov 2026, editable in the OS) and the
 // projection; the bot quotes it verbatim so the kitchen app, the OS and the
 // bot never disagree. Fail-soft: if the OS can't be reached, say so — never
 // fall back to a local estimate.
