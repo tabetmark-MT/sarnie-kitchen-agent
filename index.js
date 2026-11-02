@@ -5,6 +5,7 @@ import { sendMessage, sendChatAction, setWebhook, parseUpdate, src } from './tel
 import { sendPush, ensureVapid } from './push.js';
 import { runPushReminders } from './pushReminders.js';
 import { runPopupPush } from './popupPush.js';
+import { runLabourWatch, runClockInLabourPush } from './labourWatch.js';
 import { runHotHoldLive } from './hotHoldLive.js';
 import { runExpiryWatch, markExpiryAlerted, formatExpiryWatch } from './expiryWatch.js';
 import { generateMorningDebrief, handleMessage, handleCommand } from './agent.js';
@@ -457,6 +458,17 @@ async function runDayWatch() {
     out.cronFailing = { error: e.message };
   }
 
+  // Labour band — hourly; Telegram only when the projection leaves or
+  // re-enters 18–25% (Mark, 2 Nov 2026).
+  try {
+    const l = await runLabourWatch();
+    out.labour = { alerted: !!l.msg };
+    if (l.msg) await sendAlert(l.msg + src('SARNIE OS labour plan'));
+  } catch (e) {
+    console.error('[LabourWatch] failed:', e.message);
+    out.labour = { error: e.message };
+  }
+
   // Clock-out nudge — 21:40–22:00 only, gated inside
   try {
     const n = await runClockoutNudge();
@@ -521,6 +533,8 @@ cron.schedule('*/30 * * * *', () => { runRiskCheck().catch(e => console.error('[
 // the wake-kitchen-agent pg_cron; a backstop pg_cron call covers any gap, and
 // the 15-minute catch-up window in pushReminders.js absorbs a missed minute.
 cron.schedule('* 6-22 * * *', () => { runPushReminders().catch(e => console.error('[PushReminders cron]', e.message)); }, { timezone: 'Europe/London' });
+// Labour band push to managers when someone clocks in over the band.
+cron.schedule('* 6-22 * * *', () => { runClockInLabourPush().catch(e => console.error('[LabourClockIn cron]', e.message)); }, { timezone: 'Europe/London' });
 // Pop-up temperature checks — every 2 hours through each event's trading hours (SARNIE OS).
 cron.schedule('* 6-22 * * *', () => { runPopupPush().catch(e => console.error('[PopupPush cron]', e.message)); }, { timezone: 'Europe/London' });
 // Live hot-holding policy (probe due / 15 min left / discard now) — every minute.

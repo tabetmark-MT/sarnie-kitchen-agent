@@ -381,7 +381,8 @@ Write it as a few natural paragraphs, in this order:
    - Sundays are closed and some days are missing from the OS history — the block excludes both. A missing day is never a zero-sales day.
    - Only compare labour and sales over the SAME period. Never put a week of wages against a day of sales.
    - £0/hr staff are unpaid interns by design — their hours count, their cost is genuinely £0, and the figure is correct. Never call it understated.
-   - Labour % comes ONLY from the LABOUR PLAN block; the band is the one it states (18–25% today). If it is outside that, say so plainly and say what you think is behind it — but early in a week, on few trading days, say that the sample is short rather than calling it a trend.
+   - Labour % comes ONLY from the LABOUR PLAN block; the band is the one it states (18–25% today).
+   - EVERY morning, give the labour position against the band even when it's fine: on-pace % and if-planned % with under/within/over, then the hours to cut (over) or hours still available (under), and the budget in paid hours. If over, name the people with the most planned hours as the obvious levers — Mark's rule (2 Nov 2026) is that forecasting and target stay inside 18–25%. If it is outside that, say so plainly and say what you think is behind it — but early in a week, on few trading days, say that the sample is short rather than calling it a trend.
 
 3. RISK THAT CARRIES CONSEQUENCE. EHO status (🟢/🟡/🔴) and anything with a legal, financial or contractual edge: an overdue audit, a certificate that is missing or expiring, a fridge drifting, an allergen review due. Sweep everything that is genuinely clean into ONE short sentence so he knows what he does not have to think about. Do not itemise things that are fine.
 
