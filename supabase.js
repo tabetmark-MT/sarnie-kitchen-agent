@@ -641,9 +641,6 @@ export async function buildKitchenContext() {
       const exT = t.orderValue;
       const exW = w.orderValue;
       const exM = m.orderValue;
-      const pctT = alignedToday != null ? labourPct(alignedToday, exT) : null;
-      const pctW = alignedWeek  != null ? labourPct(alignedWeek,  exW) : null;
-      const pctM = alignedMonth != null ? labourPct(alignedMonth, exM) : null;
       const baseNote = baselineActive
         ? ` Reporting baseline ${baseline}: nothing before that date is included.`
         : ` NOTE: sales reporting officially starts ${baseline}. Figures before then are PROVISIONAL — usable, but say so if Mark leans on them for a decision.`;
@@ -653,7 +650,7 @@ export async function buildKitchenContext() {
       // we keep guarding against. State the absence instead of implying a zero.
       const todayInFeed = sales.days.some(d => d.date === todayK && isTraded(d));
       const todayLine = todayInFeed
-        ? `Today: net ${fmtGBP(t.net)}${t.orders ? ` across ${t.orders} orders` : ''}${pctT != null ? ` · labour ${pctT}% of net` : ''}`
+        ? `Today: net ${fmtGBP(t.net)}${t.orders ? ` across ${t.orders} orders` : ''}`
         : `Today (${todayK}): NO FIGURE YET — Deliveroo reports T+1, so today's sales land tomorrow morning. This is NOT zero sales; never say the kitchen took nothing today. The freshest complete day is ${latest ? latest.date : 'unknown'}.`;
       const lagNote = latest && latest.date < todayK
         ? ` — sales run to ${latest.date} only (Deliveroo reports T+1, one day behind by design, not a fault), so every % below compares labour and sales over that SAME window, not up to today`
@@ -666,8 +663,8 @@ export async function buildKitchenContext() {
   Most recent day on file: ${latest ? latest.date : 'unknown'} (${latest ? `${latest.orders} orders` : 'n/a'}).`
         : `\nSALES (live from SARNIE OS — the source of truth for revenue). Labour % is measured against TURNOVER EX-VAT — the feed's order value, which SARNIE OS already reports ex-VAT (it is Deliveroo Hub's NET SALES). Do not deduct VAT from it again${lagNote}.${baseNote}
   ${todayLine}
-  This week: turnover ex-VAT ${fmtGBP(exW)} (matches Deliveroo Hub NET SALES) over ${w.tradingDays} trading day(s)${gaps(w)}${pctW != null ? ` · labour ${pctW}% of ex-VAT turnover (£${Math.round(alignedWeek)})` : ''}
-  Month to date: turnover ex-VAT ${fmtGBP(exM)} (matches Deliveroo Hub NET SALES) over ${m.tradingDays} trading day(s)${gaps(m)}${pctM != null ? ` · labour ${pctM}% of ex-VAT turnover (£${Math.round(alignedMonth)})` : ''}
+  This week: turnover ex-VAT ${fmtGBP(exW)} (matches Deliveroo Hub NET SALES) over ${w.tradingDays} trading day(s)${gaps(w)}
+  Month to date: turnover ex-VAT ${fmtGBP(exM)} (matches Deliveroo Hub NET SALES) over ${m.tradingDays} trading day(s)${gaps(m)}
   Most recent trading day on file: ${latest ? `${latest.date} — turnover ex-VAT ${fmtGBP(Number(latest.gross) || 0)} (this is the figure Deliveroo Hub shows as NET SALES)` : 'none'}
   ${m.estimated ? 'Note: at least one day had no commission figure, so 27% was assumed — treat as slightly approximate.\n  ' : ''}RULES YOU MUST FOLLOW:
   • Sundays are scheduled-closed — labour ÷ sales is undefined, not zero. Never average them in. If one ever DOES take money it still counts as revenue.
@@ -676,7 +673,7 @@ export async function buildKitchenContext() {
   • Say "ex-VAT turnover" when you quote the denominator, so Mark knows which figure it is. Deliveroo's commission is a COST OF SALE and does NOT reduce turnover — never subtract it before working out labour %.
   • Do NOT quote a "net sales" or payout figure from this feed. Its net field omits VAT on commission and per-statement fees, so it overstates the money actually banked by roughly 18%. Order value and ex-VAT turnover are reconciled and safe; payout is not.
   • Deliveroo's real take is about 38% of order value (27% commission + 20% VAT on that + advertising/refund fees). If Mark asks what Deliveroo costs him, use ~38%, not 27%.
-  • Healthy labour is roughly 25–35% of net. Flag it only when clearly outside that.
+  • Labour % is NOT in this block. Quote labour % ONLY from the LABOUR PLAN block below (SARNIE OS's projection, the same figure both apps show).
   • The labour figures inside each % have ALREADY been trimmed to the days sales cover, so the percentages are like-for-like. The standalone labour £ totals in the EMPLOYEE LABOUR COST block run to today and are therefore LARGER — never divide those by these sales figures yourself.`;
     }
   } catch { /* fail soft — keep the "not connected" line */ }
@@ -1134,6 +1131,7 @@ ${deliveryBlock}
 ${employeeBlock}
 ${labourBlock}
 ${salesBlock}
+${await labourPlanBlock()}
 ${qualityBlock}
 ${profilesBlock}
 ${docBlock}
@@ -1141,4 +1139,35 @@ ${docBlock}
 RECENT AUDIT EVENTS:
 ${audit.slice(0, 10).map(a => `  • ${new Date(a.timestamp).toLocaleString('en-GB', { timeZone: 'Europe/London' })} — ${a.action}: ${a.detail || ''}`).join('\n')}
 `.trim();
+}
+
+
+// LABOUR PLAN (labour projection contract v2, approved by Mark 2 Nov 2026).
+// SARNIE OS owns sales, the band (18–25% today, editable in the OS) and the
+// projection; the bot quotes it verbatim so the kitchen app, the OS and the
+// bot never disagree. Fail-soft: if the OS can't be reached, say so — never
+// fall back to a local estimate.
+async function labourPlanBlock() {
+  try {
+    const token = process.env.SUPPLIER_FEED_TOKEN || (await getSetting('sarnie_supplier_feed_token'));
+    if (!token) return '\nLABOUR PLAN: not configured — do not give any labour % figure.';
+    const r = await fetch('https://sarnie-inventory-app.vercel.app/api/intel/labour-plan?site=SS-ISL', {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) return `\nLABOUR PLAN: SARNIE OS returned HTTP ${r.status} — do not give any labour % figure; say the labour plan is unavailable.`;
+    const d = await r.json();
+    const g = (n) => (Number.isFinite(n) ? `£${Math.round(n).toLocaleString('en-GB')}` : 'n/a');
+    const pr = (label, p) => (p ? `${label}: ${p.pct}% (${g(p.cost)}) — ${String(p.status).toUpperCase()}${p.hoursToCut > 0 ? ` · cut ${p.hoursToCut}h to reach the top of the band` : ''}${p.hoursAvailable > 0 ? ` · ${p.hoursAvailable}h still available in band` : ''}` : `${label}: not available`);
+    const t = d.target || {}, b = d.budget || {}, a = d.actual || {}, sl = d.sales || {};
+    return `\nLABOUR PLAN (live from SARNIE OS, week ${d.week?.id || '?'} — the ONLY source for labour %; quote these numbers, never recompute):
+  Target band: ${t.minPct}–${t.maxPct}% of ${d.basis || 'sales before commission, ex-VAT'}.
+  Sales: ${g(sl.actualToDate)} to date + ${g(sl.forecastRemaining)} forecast = ${g(sl.projected)} projected.
+  Actual so far: ${g(a.cost)}, ${a.hours}h, ${a.pct}%.
+  ${pr('On pace', d.projected?.onPace)}
+  ${pr('If everyone works their plan (students at term cap, contract at max)', d.projected?.ifPlanned)}
+  Budget to stay in band: ${g(b.atMin)}–${g(b.atMax)} (${b.hoursAtMin}–${b.hoursAtMax}h).
+  ${Array.isArray(d.assumptions) && d.assumptions.length ? `Assumptions: ${d.assumptions.join(' | ')}` : ''}`;
+  } catch (e) {
+    return `\nLABOUR PLAN: unreachable (${e.message}) — do not give any labour % figure.`;
+  }
 }
