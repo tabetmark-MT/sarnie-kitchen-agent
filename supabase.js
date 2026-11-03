@@ -178,6 +178,7 @@ export async function getAllData() {
     popup_compliance: 'event_id',
     sites: 'code',
     site_settings: 'site',
+    user_sites: 'user_id',
   };
   const PAGE = 1000;
   const tables = [
@@ -200,6 +201,8 @@ export async function getAllData() {
     // Multi-site K1 (28 Oct 2026, Whitechapel): the kitchen list and the
     // per-kitchen settings. Every row above now also carries its `site`.
     'sites', 'site_settings',
+    // K2 (2 Nov 2026): which kitchens each login may use.
+    'user_sites',
   ];
   const out = {};
   const short = [];
