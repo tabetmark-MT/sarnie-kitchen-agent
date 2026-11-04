@@ -1,0 +1,22 @@
+name: Test alert copies
+
+# Manual only. Sends a one-line test to every chat in app_settings.telegram_alert_cc
+# (never the owner) so a newly added recipient can be confirmed — e.g. Seif, 4 Nov 2026.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send test to alert-copy chats
+        env:
+          BACKUP_URL: ${{ secrets.BACKUP_URL }}
+        run: |
+          base="${BACKUP_URL%/tasks/*}"
+          secret="${BACKUP_URL##*/}"
+          echo "::add-mask::$secret"
+          body=$(curl -s --max-time 120 -H "Authorization: Bearer $secret" "$base/tasks/test-alert-cc" || true)
+          echo "Response: $body"
+          echo "$body" | grep -q '"ok":true' || { echo "::error::test-alert-cc failed"; exit 1; }

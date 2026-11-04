@@ -290,7 +290,7 @@ task('test-alert-cc', async (req, res) => {
     const ids = await alertCcIds();
     const sent = [];
     for (const id of ids) {
-      await sendMessage(id, '✅ <b>Test from the Sarnie Social kitchen bot</b>\n\nYou are set up to receive the kitchen alerts Mark gets — compliance flags, hot-holding "discard now", staff still clocked in, and system problems — until Sunday 25 October. No need to reply; this chat only sends alerts.');
+      await sendMessage(id, '✅ <b>Test from the Sarnie Social kitchen bot</b>\n\nYou are set up to receive the same kitchen messages Mark gets — the morning brief, compliance flags, hot-holding "discard now", labour alerts, staff still clocked in, and system problems. No need to reply; this chat only sends alerts.');
       sent.push(id);
     }
     res.json({ ok: true, sent: sent.length });
