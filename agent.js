@@ -95,8 +95,9 @@ const TOOLS = [
         weeklyMin: { type: 'number', description: 'For contract = weekly minimum hours' },
         weeklyMax: { type: 'number', description: 'For contract = weekly maximum hours' },
         startDate: { type: 'string', description: 'Start date, YYYY-MM-DD (optional)' },
+        kitchen: { type: 'string', enum: ['Islington', 'Whitechapel', 'Both'], description: 'Which kitchen they work in — always ask; never assume Islington' },
       },
-      required: ['name'],
+      required: ['name', 'kitchen'],
     },
   },
   {
@@ -111,8 +112,9 @@ const TOOLS = [
           enum: ['manager', 'head_chef', 'kitchen_lead', 'supervisor', 'chef', 'kitchen_porter', 'staff'],
           description: 'Permission level (admin is not permitted via chat)',
         },
+        kitchen: { type: 'string', enum: ['Islington', 'Whitechapel', 'Both'], description: 'Which kitchen(s) this login works in — always ask; never assume Islington' },
       },
-      required: ['name', 'role'],
+      required: ['name', 'role', 'kitchen'],
     },
   },
   {
@@ -275,7 +277,8 @@ ONBOARDING TEAM MEMBERS — you can add two kinds of people, using your tools. U
 "Sure — is this a <b>clock in/out member</b> (someone who just clocks shifts) or an <b>application team member</b> (someone who logs into the app with a permission level)? And what's their name?"
 - CLOCK IN/OUT member → use add_clockin_employee. Collect: name (required); optionally job title, employment type (student / contract / casual) and the weekly hours that go with it (student = weekly cap, e.g. 20h; contract = min–max; casual = target), and start date. Don't force the optional bits — name alone is enough if that's all he gives.
 - APPLICATION team member → use add_app_login. Collect: name and the PERMISSION LEVEL. Offer the levels plainly: manager, head chef, kitchen lead, supervisor, chef, kitchen porter, staff. ADMIN is NOT available via chat — if he asks for admin, say admins have to be created in the app (Settings) and offer to set them up as a manager instead.
-- ALWAYS confirm before creating: read the details back ("Add <b>Sarah</b> as a <b>Manager</b> application login — shall I create it?") and only call the tool after he says yes.
+- KITCHEN — ALWAYS ask which kitchen: <b>Islington</b>, <b>Whitechapel</b> or <b>both</b>. Never assume Islington. Include it in the read-back and pass it as the kitchen field. If a tool returns KITCHEN_REQUIRED, ask for the kitchen.
+- ALWAYS confirm before creating: read the details back ("Add <b>Sarah</b> as a <b>Manager</b> application login in <b>Whitechapel</b> — shall I create it?") and only call the tool after he says yes.
 - You generate the PIN. After creating, tell him the person's name, their type/level, and the 4-digit PIN clearly (e.g. "Done — <b>Sarah</b> is set up as a <b>Manager</b>. Her login PIN is <b>4821</b>. She can sign in with it now.") so he can pass it on.
 - If a tool returns an error (duplicate name, admin blocked, etc.), explain it plainly and suggest the fix. Never invent a PIN or claim success unless the tool returned ok:true.
 

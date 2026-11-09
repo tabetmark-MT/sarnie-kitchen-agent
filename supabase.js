@@ -379,12 +379,23 @@ async function allocatePin(table) {
   throw new Error('Could not allocate a free PIN — set one manually in the app.');
 }
 
+// Kitchens (K3, Mark 9 Nov 2026): every new person is placed in Islington,
+// Whitechapel or both — never silently in Islington only.
+const KITCHEN_CODES = { islington: 'SS-ISL', whitechapel: 'SS-WCL' };
+function kitchensFrom(kitchen) {
+  const k = String(kitchen || '').trim().toLowerCase();
+  if (k === 'both') return ['SS-ISL', 'SS-WCL'];
+  if (KITCHEN_CODES[k]) return [KITCHEN_CODES[k]];
+  throw new Error('KITCHEN_REQUIRED');
+}
+
 const VALID_ROLES = ['admin', 'manager', 'head_chef', 'kitchen_lead', 'supervisor', 'chef', 'kitchen_porter', 'staff'];
 
 // Add a CLOCK IN/OUT employee: profile in app_settings.employees + clock PIN in
 // employee_pins. Returns { id, name, pin }.
-export async function addClockInEmployee({ name, role, empType, weeklyHours, weeklyMin, weeklyMax, startDate }) {
+export async function addClockInEmployee({ name, role, empType, weeklyHours, weeklyMin, weeklyMax, startDate, kitchen }) {
   if (!name || !String(name).trim()) throw new Error('A name is required.');
+  const sites = kitchensFrom(kitchen);
   const { data: cur } = await supabase.from('app_settings').select('value').eq('key', 'employees').maybeSingle();
   const employees = Array.isArray(cur?.value) ? cur.value : [];
   if (employees.some(e => (e.name || '').trim().toLowerCase() === String(name).trim().toLowerCase()))
@@ -399,19 +410,26 @@ export async function addClockInEmployee({ name, role, empType, weeklyHours, wee
     startDate: startDate || undefined,
     certs: [],
   };
-  employees.push(emp);
-  const up1 = await supabase.from('app_settings').upsert([{ key: 'employees', value: employees, updated_at: new Date().toISOString() }], { onConflict: 'key' });
+  // Kitchens first, then the person as their own row at the end of the list
+  // (the database keeps app_settings.employees in step). No whole-list rewrite,
+  // so an edit made in the app at the same moment can't be lost.
+  const es = await supabase.from('employee_sites').upsert(sites.map((site) => ({ employee_id: id, site, granted_by: 'Telegram' })), { onConflict: 'employee_id,site', ignoreDuplicates: true });
+  if (es.error) throw new Error(es.error.message);
+  const { data: last } = await supabase.from('employee_rows').select('ord').order('ord', { ascending: false }).limit(1);
+  const ord = ((last && last[0]?.ord) ?? (employees.length - 1)) + 1;
+  const up1 = await supabase.from('employee_rows').insert([{ id, ord, data: JSON.parse(JSON.stringify(emp)) }]);
   if (up1.error) throw new Error(up1.error.message);
   const pin = await allocatePin('employee_pins');
   const up2 = await supabase.from('employee_pins').upsert([{ id, pin }]);
   if (up2.error) throw new Error(up2.error.message);
-  return { id, name: emp.name, role: emp.role, pin };
+  return { id, name: emp.name, role: emp.role, pin, kitchens: sites };
 }
 
 // Add an APPLICATION login: row in app_users (login system auto-provisions auth
 // on first sign-in). Admin role is NOT allowed via the agent. Returns { id, name, role, pin }.
-export async function addAppUser({ name, role }) {
+export async function addAppUser({ name, role, kitchen }) {
   if (!name || !String(name).trim()) throw new Error('A name is required.');
+  const sites = kitchensFrom(kitchen);
   const r = String(role || 'staff').toLowerCase().replace(/[\s-]+/g, '_');
   if (r === 'admin') throw new Error('ADMIN_BLOCKED');
   if (!VALID_ROLES.includes(r)) throw new Error(`Unknown permission level "${role}". Valid: manager, head_chef, kitchen_lead, supervisor, chef, kitchen_porter, staff.`);
@@ -421,7 +439,13 @@ export async function addAppUser({ name, role }) {
   const pin = await allocatePin('app_users');
   const up = await supabase.from('app_users').upsert([{ id, name: String(name).trim(), role: r, active: true, pin }]);
   if (up.error) throw new Error(up.error.message);
-  return { id, name: String(name).trim(), role: r, pin };
+  // The database defaults a server-created login to Islington; set exactly
+  // the kitchens chosen.
+  const del = await supabase.from('user_sites').delete().eq('user_id', id).not('site', 'in', `(${sites.join(',')})`);
+  if (del.error) throw new Error(del.error.message);
+  const us = await supabase.from('user_sites').upsert(sites.map((site) => ({ user_id: id, site, granted_by: 'Telegram' })), { onConflict: 'user_id,site', ignoreDuplicates: true });
+  if (us.error) throw new Error(us.error.message);
+  return { id, name: String(name).trim(), role: r, pin, kitchens: sites };
 }
 
 // ── Live supplier/item catalogue from SARNIE OS (source of truth) ──────────
