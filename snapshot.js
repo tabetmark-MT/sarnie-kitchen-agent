@@ -84,7 +84,9 @@ function toAppSnapshot(db) {
 
   const defaults = {};
   const custom = [];
-  for (const row of db.checklists || []) {
+  // Islington's restore point only: from K3 checklists are per kitchen and
+  // ids repeat across kitchens. Rows from before the site column are Islington's.
+  for (const row of (db.checklists || []).filter((r) => (r.site || 'SS-ISL') === 'SS-ISL')) {
     if (row.is_custom) custom.push(row.data);
     else defaults[row.id] = row.data;
   }
