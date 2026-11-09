@@ -11,7 +11,7 @@
 //  - Skipped when the job is already done: opening/closing clean signed,
 //    weekly clean / monthly audit / probe calibration / allergen review done in
 //    their period, or a hot-holding probe reading in the last hour.
-import { getSetting, getCompletionsRange, getWatchState, setWatchState, markRun } from './supabase.js';
+import { getSiteSetting, getTradingSites, getCompletionsRange, getWatchState, setWatchState, markRun, HOME_SITE } from './supabase.js';
 import { sendPush } from './push.js';
 
 const LDN = 'Europe/London';
@@ -34,17 +34,32 @@ const META = {
   allergenReview:   { title: '🥜 Allergen review due',     body: 'The 4-weekly allergen review is due.', url: '/allergens/review' },
 };
 
+// Multi-site (K3): one pass per trading kitchen, each with its own schedule,
+// reminders, records and devices. Islington's pass is the job as it was
+// (same settings, same history key 'push_reminders', its devices only).
 export async function runPushReminders({ now = new Date(), dryRun = false } = {}) {
+  const sites = await getTradingSites();
+  const results = {};
+  for (const site of sites) {
+    try { results[site] = await runForSite(site, { now, dryRun }); }
+    catch (e) { results[site] = { error: String(e?.message || e) }; if (site === HOME_SITE) throw e; }
+  }
+  if (!dryRun) await markRun('push_reminders');
+  return sites.length === 1 ? results[HOME_SITE] : results;
+}
+
+async function runForSite(site, { now, dryRun }) {
+  const stateKey = site === HOME_SITE ? 'push_reminders' : `push_reminders_${site}`;
   const p = parts(now);
   const today = `${p.year}-${p.month}-${p.day}`;
   const nowMin = Number(p.hour) * 60 + Number(p.minute);
-  const [r, sched] = await Promise.all([getSetting('reminders_v2'), getSetting('schedule')]);
+  const [r, sched] = await Promise.all([getSiteSetting(site, 'reminders_v2'), getSiteSetting(site, 'schedule')]);
   if (!r || typeof r !== 'object') return { skipped: 'no reminder schedule saved' };
 
   const wdLong = new Date(`${today}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }).toLowerCase();
   const closed = (Array.isArray(sched?.closures) && sched.closures.some((c) => (c?.date || c) === today))
     || (sched && sched[wdLong]?.open === false);
-  if (closed) { if (!dryRun) await markRun('push_reminders'); return { skipped: 'closed today' }; }
+  if (closed) return { skipped: 'closed today' };
 
   // What is DUE in the catch-up window.
   const due = [];
@@ -73,18 +88,18 @@ export async function runPushReminders({ now = new Date(), dryRun = false } = {}
       at(`custom-${c.id || c.label}`, c.time, { title: `🔔 ${c.label}`, body: 'Scheduled reminder.', url: '/' });
     }
   });
-  if (!due.length) { if (!dryRun) await markRun('push_reminders'); return { ok: true, due: 0 }; }
+  if (!due.length) return { ok: true, due: 0 };
 
   // Already done? (read only when something is due — most minutes nothing is)
-  const state = await getWatchState('push_reminders');
-  const rows = await getCompletionsRange(31);
+  const state = await getWatchState(stateKey);
+  const rows = await getCompletionsRange(31, site);
   const todays = rows.filter((c) => ldnDate(c.date) === today);
   const monIdx = (new Date(`${today}T12:00:00Z`).getUTCDay() + 6) % 7;
   const weekStart = ldnDate(new Date(new Date(`${today}T12:00:00Z`).getTime() - monIdx * 86400000));
   const inWeek = (c) => ldnDate(c.date) >= weekStart;
   const inMonth = (c) => ldnDate(c.date).slice(0, 7) === today.slice(0, 7);
-  const board = (await getSetting('hh_board')) || [];
-  const cals = ((await getSetting('probe_calibration')) || []).filter((e) => e?.kind === 'cal' && ldnDate(e.createdAt || e.date) >= weekStart && e.pass !== false);
+  const board = (await getSiteSetting(site, 'hh_board')) || [];
+  const cals = ((await getSiteSetting(site, 'probe_calibration')) || []).filter((e) => e?.kind === 'cal' && ldnDate(e.createdAt || e.date) >= weekStart && e.pass !== false);
   const done = {
     openingClean: todays.some((c) => c.checklist_id === 'daily' && c.section_id === 'opening'),
     closingClean: todays.some((c) => c.checklist_id === 'daily' && c.section_id === 'closing'),
@@ -101,10 +116,10 @@ export async function runPushReminders({ now = new Date(), dryRun = false } = {}
     if (state[mark]) { out.alreadySent.push(d.key); continue; }
     if (done[d.base]) { out.skippedDone.push(d.key); state[mark] = 'done-already'; continue; }
     if (dryRun) { out.sent.push(d.key); continue; }
-    const res = await sendPush({ title: d.title, body: d.body, url: d.url, tag: d.base, requireInteraction: !!d.requireInteraction });
+    const res = await sendPush({ title: d.title, body: d.body, url: d.url, tag: d.base, requireInteraction: !!d.requireInteraction }, { site });
     state[mark] = new Date().toISOString();
     out.sent.push({ key: d.key, devices: res.devices, ok: res.sent, failed: res.failed });
   }
-  if (!dryRun) { await setWatchState('push_reminders', state); await markRun('push_reminders'); }
+  if (!dryRun) await setWatchState(stateKey, state);
   return out;
 }

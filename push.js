@@ -40,11 +40,14 @@ export async function ensureVapid() {
 }
 
 // payload: { title, body, url, tag, requireInteraction, action }
-// filter: optional { userId } to send to one person's devices only.
+// filter: optional { userId } to send to one person's devices only;
+//         optional { site } to send to one kitchen's devices only.
 export async function sendPush(payload, filter = {}) {
   await ensureVapid();
   let q = supabase.from('push_subscriptions').select('id,endpoint,p256dh,auth,fail_count,device_label');
   if (filter.userId) q = q.eq('user_id', filter.userId);
+  // Kitchen reminders go only to that kitchen's devices (K3).
+  if (filter.site) q = q.eq('site', filter.site);
   const { data: subs, error } = await q;
   if (error) throw new Error(`push_subscriptions read failed: ${error.message}`);
   const out = { sent: 0, failed: 0, removed: 0, devices: (subs || []).length, errors: [] };

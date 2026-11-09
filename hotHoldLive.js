@@ -50,7 +50,8 @@ export async function runHotHoldLive({ now = new Date(), notifyOwner = null, dry
       const mark = `${a.key}:${today}`;
       if (state[mark]) continue;
       if (!dryRun) {
-        await sendPush({ title: a.title, body: a.body, url: '/hotholding', tag: `hh-${id}`, requireInteraction: true });
+        // Islington's board → Islington's devices (K3; per-kitchen boards when Whitechapel trades).
+        await sendPush({ title: a.title, body: a.body, url: '/hotholding', tag: `hh-${id}`, requireInteraction: true }, { site: 'SS-ISL' });
         if (a.owner && notifyOwner) await notifyOwner(`🗑️ <b>Hot holding — discard now</b>\n\n${a.body}`);
       }
       state[mark] = new Date().toISOString();

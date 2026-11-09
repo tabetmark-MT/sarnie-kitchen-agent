@@ -65,20 +65,26 @@ export function ldnMidnightOf(dateKey) {
 }
 
 // ── Fetch today's completions ──────────────────────────────────────────────
-export async function getTodayCompletions() {
+// Multi-site (K3): every per-kitchen read names its kitchen; SS-ISL by default,
+// which is every row that exists before Whitechapel opens.
+export const HOME_SITE = 'SS-ISL';
+
+export async function getTodayCompletions(site = HOME_SITE) {
   const { data } = await supabase
     .from('completions')
     .select('*')
+    .eq('site', site)
     .gte('date', ldnMidnight(0).toISOString())
     .order('date', { ascending: false });
   return data || [];
 }
 
 // ── Fetch yesterday's completions ──────────────────────────────────────────
-export async function getYesterdayCompletions() {
+export async function getYesterdayCompletions(site = HOME_SITE) {
   const { data } = await supabase
     .from('completions')
     .select('*')
+    .eq('site', site)
     .gte('date', ldnMidnight(1).toISOString())
     .lt('date', ldnMidnight(0).toISOString())
     .order('date', { ascending: false });
@@ -86,10 +92,11 @@ export async function getYesterdayCompletions() {
 }
 
 // ── Fetch completions for a date range ────────────────────────────────────
-export async function getCompletionsRange(daysBack = 7) {
+export async function getCompletionsRange(daysBack = 7, site = HOME_SITE) {
   const { data } = await supabase
     .from('completions')
     .select('*')
+    .eq('site', site)
     .gte('date', ldnMidnight(daysBack).toISOString())
     .order('date', { ascending: false });
   return data || [];
@@ -100,6 +107,21 @@ export async function getSetting(key) {
   const { data } = await supabase.from('app_settings').select('value').eq('key', key).maybeSingle();
   return data?.value;
 }
+// A kitchen's own copy of a per-kitchen setting (K3). Islington's lives in
+// app_settings (unchanged); any other kitchen's in site_settings.
+export async function getSiteSetting(site, key) {
+  if (!site || site === HOME_SITE) return getSetting(key);
+  const { data } = await supabase.from('site_settings').select('value').eq('site', site).eq('key', key).maybeSingle();
+  return data?.value;
+}
+// Kitchens the scheduled jobs run for: trading ones only. Islington always,
+// so a failed read can never switch its reminders or alerts off.
+export async function getTradingSites() {
+  const { data, error } = await supabase.from('sites').select('code,trading').order('code');
+  const codes = (error ? [] : (data || [])).filter((r) => r.trading).map((r) => r.code);
+  return [HOME_SITE, ...codes.filter((c) => c !== HOME_SITE)];
+}
+
 export async function upsertSetting(key, value) {
   // This used to discard the result entirely. On 10-11 Aug the auto clock-out
   // did not close four open shifts and NOTHING said so: the nightly job still
@@ -120,11 +142,14 @@ export async function upsertSetting(key, value) {
 // migration). Returned in the camelCase shape the callers already speak, so the
 // hour arithmetic around them is untouched. `sinceMs` bounds the read — nothing
 // here ever needs the full history.
-export async function getTimeEntries(sinceMs = null) {
+// site = null reads every kitchen (the auto clock-out must close every open
+// shift, wherever it was clocked); pass a code for one kitchen's hours.
+export async function getTimeEntries(sinceMs = null, site = null) {
   let q = supabase
     .from('time_entries')
     .select('id,employee_id,employee_name,clock_in,clock_out,auto_clock_out,auto_note')
     .order('clock_in', { ascending: false });
+  if (site) q = q.eq('site', site);
   if (sinceMs) q = q.gte('clock_in', new Date(sinceMs).toISOString());
   const { data, error } = await q;
   if (error) {
@@ -275,10 +300,11 @@ export async function getUsers() {
 }
 
 // ── Fetch recent audit log ─────────────────────────────────────────────────
-export async function getRecentAudit(limit = 50) {
+export async function getRecentAudit(limit = 50, site = HOME_SITE) {
   const { data } = await supabase
     .from('audit_log')
     .select('*')
+    .eq('site', site)
     .order('timestamp', { ascending: false })
     .limit(limit);
   return data || [];
@@ -497,7 +523,7 @@ export async function buildKitchenContext() {
     Number(new Date().toLocaleDateString('en-CA', { timeZone: LDN }).slice(8, 10)) - 1,
   ).getTime();
   const historyFromMs = Math.min(monthStartMs, weekStart.getTime() - 14 * 86400000) - 86400000;
-  const timeEntries = await getTimeEntries(historyFromMs);
+  const timeEntries = await getTimeEntries(historyFromMs, HOME_SITE);
   const entryMins = (e, fromMs) => {
     const s = Math.max(new Date(e.clockIn).getTime(), fromMs);
     const en = e.clockOut ? new Date(e.clockOut).getTime() : nowMs;

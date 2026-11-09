@@ -16,7 +16,7 @@ import { runHeartbeat, formatHeartbeat, heartbeatAlreadySentThisWeek } from './h
 import { runClockoutNudge, formatClockoutNudge, autoCloseRate } from './clockoutNudge.js';
 import { runComplianceWatch, formatComplianceWatch, markComplianceAlerted, complianceScorecard } from './complianceWatch.js';
 import { runAutoClockOut, formatAutoClockOut } from './autoClockout.js';
-import { supabase, getSetting, upsertSetting, getComplianceSnapshot, markRun, getWatchState, setWatchState } from './supabase.js';
+import { supabase, getSetting, upsertSetting, getComplianceSnapshot, markRun, getWatchState, setWatchState, getTradingSites, HOME_SITE } from './supabase.js';
 import { authorisedIntel, buildComplianceSnapshot } from './intel.js';
 import { siteGate } from './siteGate.js';
 
@@ -400,19 +400,23 @@ async function runDayWatch() {
 
   // Compliance — hourly 11:00–22:30
   try {
-    const c = await runComplianceWatch();
-    out.compliance = c.skipped ? { skipped: c.skipped } : { alerts: c.alerts.length, bridge: c.bridgeReachable };
+    // One pass per trading kitchen (K3). Islington only until Whitechapel trades.
+    for (const site of await getTradingSites()) {
+    const c = await runComplianceWatch({ site });
+    if (site === HOME_SITE) out.compliance = c.skipped ? { skipped: c.skipped } : { alerts: c.alerts.length, bridge: c.bridgeReachable };
+    else (out.complianceSites ||= {})[site] = c.skipped ? { skipped: c.skipped } : { alerts: c.alerts.length };
     const msg = formatComplianceWatch(c);
     if (msg) {
       await sendAlert(msg);
-      await markComplianceAlerted(c.state, c.today, c.alerts.map(a => a.check));
+      await markComplianceAlerted(c.state, c.today, c.alerts.map(a => a.check), site);
       // Hot-holding warnings also go to the kitchen's own devices — the people
       // who can probe or discard, at the moment it matters, not just Mark.
       const hh = c.alerts.filter(a => /^hh/.test(a.check));
       for (const a of hh) {
-        await sendPush({ title: '🌡️ Hot holding', body: a.text.replace(/<[^>]+>/g, ''), url: '/hotholding', tag: a.check, requireInteraction: true })
+        await sendPush({ title: '🌡️ Hot holding', body: a.text.replace(/<[^>]+>/g, ''), url: '/hotholding', tag: a.check, requireInteraction: true }, { site })
           .catch(e => console.error('[Push] hot-hold alert failed:', e.message));
       }
+    }
     }
   } catch (e) {
     console.error('[ComplianceWatch] failed:', e.message);

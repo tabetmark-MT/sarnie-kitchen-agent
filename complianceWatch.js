@@ -27,7 +27,10 @@
 // checklist not signed" and "no hot-holding" with the kitchen shut, because it
 // never looked. A closed day now sends nothing.
 import { PROBE_GRACE_MIN } from './hotHoldLive.js';
-import { getCompletionsRange, getComplianceSnapshot, getWatchState, setWatchState, markRun, getSetting } from './supabase.js';
+import { getCompletionsRange, getComplianceSnapshot, getWatchState, setWatchState, markRun, getSetting, getSiteSetting, HOME_SITE } from './supabase.js';
+// Multi-site (K3): every check runs for one kitchen. Islington = the job as it
+// was (history key 'compliance_watch'); another kitchen keeps its own history.
+const watchKey = (site) => (site === HOME_SITE ? 'compliance_watch' : `compliance_watch_${site}`);
 
 const LDN = 'Europe/London';
 const ldnDate = (d = new Date()) => d.toLocaleDateString('en-CA', { timeZone: LDN });
@@ -75,8 +78,8 @@ const fmt = (mins) => `${String(Math.floor(mins / 60)).padStart(2, '0')}:${Strin
 
 // Today's roster, read exactly as the kitchen app reads it. `null` schedule =
 // unknown: treated as open, the old behaviour, rather than silencing alerts.
-async function todaysHours(today) {
-  const sched = await getSetting('schedule').catch(() => null);
+async function todaysHours(today, site = HOME_SITE) {
+  const sched = await getSiteSetting(site, 'schedule').catch(() => null);
   if (!sched || typeof sched !== 'object') return { open: true, openAt: 10 * 60, closeAt: 21 * 60 + 30, known: false };
   const wd = WEEKDAYS[new Date(`${today}T12:00:00Z`).getUTCDay()];
   // schedule.specialHours[date] = one-off hours for that date (festive days).
@@ -85,29 +88,29 @@ async function todaysHours(today) {
   return { open: cfg.open !== false && !closed, openAt: hhmm(cfg.openTime, '10:00'), closeAt: hhmm(cfg.closeTime, '21:30'), known: true };
 }
 
-export async function runComplianceWatch({ force = false } = {}) {
+export async function runComplianceWatch({ force = false, site = HOME_SITE } = {}) {
   const now = ldnMins();
   if (!force && (now < WINDOW_OPEN || now > WINDOW_CLOSE)) {
     return { skipped: `outside 11:00–22:30 London` };
   }
 
   const today = ldnDate();
-  const hours = await todaysHours(today);
+  const hours = await todaysHours(today, site);
   if (!hours.open) {
     // Still a successful run — the Monday heartbeat must not read a closed
     // Sunday as the watcher having stopped.
-    await markRun('compliance_watch');
-    return { skipped: 'kitchen closed today (roster)' };
+    if (site === HOME_SITE) await markRun('compliance_watch');
+    return { skipped: 'kitchen closed today (roster)', site };
   }
   const OPENING_DUE_AT = hours.openAt + OPENING_GRACE;
   const CLOSING_DUE_AT = hours.closeAt + CLOSING_GRACE;
-  const state = await getWatchState('compliance_watch');
+  const state = await getWatchState(watchKey(site));
   const alerts = [];
   // One alert per check per day. Marked BEFORE sending would risk losing it on a
   // send failure, so the caller marks only what it actually delivered.
   const fired = (check) => !!state[`${check}:${today}`];
 
-  const rows = await getCompletionsRange(2);
+  const rows = await getCompletionsRange(2, site);
   const todays = rows.filter((r) => ldnDate(new Date(r.date)) === today);
   const newest = (cid, sid) => todays
     .filter((r) => r.checklist_id === cid && (!sid || r.section_id === sid))
@@ -118,7 +121,7 @@ export async function runComplianceWatch({ force = false } = {}) {
   // today are real hot holding even before that, so they satisfy the nudge;
   // and an item left open overnight is itself the problem to flag — on 29 Sep
   // 2026 Beef sat open with three good readings and the day had no log.
-  const board = await getSetting('hh_board').catch(() => null);
+  const board = await getSiteSetting(site, 'hh_board').catch(() => null);
   const items = Array.isArray(board) ? board : [];
   const readToday = items.some((it) => (it.readings || []).some((r) => r?.time && ldnDate(new Date(r.time)) === today));
   const staleOpen = items.filter((it) => !it.outcome && it.startTime && ldnDate(new Date(it.startTime)) < today);
@@ -197,7 +200,8 @@ export async function runComplianceWatch({ force = false } = {}) {
 
   // ── 5. Periodic tasks — RELAYED from the bridge, never recomputed ──
   // The app owns this verdict and SARNIE OS scores the bonus off the same feed.
-  const snap = await getComplianceSnapshot();
+  // The bridge feed is Islington's until Whitechapel is in feed scope.
+  const snap = site === HOME_SITE ? await getComplianceSnapshot() : null;
   if (snap && Array.isArray(snap.periodic)) {
     for (const p of snap.periodic) {
       if (!p.required || !p.overdue) continue;
@@ -206,20 +210,21 @@ export async function runComplianceWatch({ force = false } = {}) {
     }
   }
 
-  await markRun('compliance_watch');
-  return { ok: true, alerts, today, state, bridgeReachable: !!snap };
+  if (site === HOME_SITE) await markRun('compliance_watch');
+  return { ok: true, alerts, today, state, site, bridgeReachable: !!snap };
 }
 
 // Called by the sender once a message is actually delivered, so a Telegram
 // failure does not silently consume the day's only alert.
-export async function markComplianceAlerted(state, today, checks) {
+export async function markComplianceAlerted(state, today, checks, site = HOME_SITE) {
   for (const c of checks) state[`${c}:${today}`] = new Date().toISOString();
-  await setWatchState('compliance_watch', state);
+  await setWatchState(watchKey(site), state);
 }
 
 export function formatComplianceWatch(r) {
   if (!r?.alerts?.length) return null;
-  const lines = ['⚠️ <b>Compliance</b>', ''];
+  // Islington's alert reads exactly as before; another kitchen is named.
+  const lines = [r.site && r.site !== HOME_SITE ? `⚠️ <b>Compliance — ${r.siteName || r.site}</b>` : '⚠️ <b>Compliance</b>', ''];
   for (const a of r.alerts) lines.push(`• ${a.text}`);
   const at = new Date().toLocaleTimeString('en-GB', { timeZone: LDN, hour: '2-digit', minute: '2-digit' });
   lines.push('', `<i>Source: kitchen checklists · hot-holding board · opening hours — checked ${at}</i>`);

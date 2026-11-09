@@ -60,7 +60,7 @@ export async function buildComplianceSnapshot({ from, to } = {}) {
 
   // Pull completions across the window (+1 day buffer either side for tz safety).
   const { data: rows } = await supabase
-    .from('completions').select('*')
+    .from('completions').select('*').eq('site', 'SS-ISL')
     .gte('date', addDays(fromK, -1) + 'T00:00:00')
     .lte('date', addDays(toK, 1) + 'T23:59:59')
     .order('date', { ascending: true });
@@ -147,7 +147,7 @@ export async function buildComplianceSnapshot({ from, to } = {}) {
   // ── Allergen review ──
   const allergenRev = comps.filter(c => cid(c) === 'allergen_monthly').sort((a, b) => new Date(b.date) - new Date(a.date))[0]
     // also look beyond the window for the most recent review
-    || ((await supabase.from('completions').select('*').eq('checklist_id', 'allergen_monthly').order('date', { ascending: false }).limit(1)).data || [])[0];
+    || ((await supabase.from('completions').select('*').eq('site', 'SS-ISL').eq('checklist_id', 'allergen_monthly').order('date', { ascending: false }).limit(1)).data || [])[0];
   const revAt = allergenRev ? new Date(allergenRev.date) : null;
   const changeLog = settings.allergen_menu?.changeLog || [];
   const lastChange = changeLog.filter(e => !['note', 'review', 'initial_setup'].includes(e.type)).map(e => new Date(e.date)).sort((a, b) => b - a)[0] || null;
@@ -183,7 +183,7 @@ export async function buildComplianceSnapshot({ from, to } = {}) {
   // Phase 3: hours come from public.time_entries, not the settings blob.
   // A day of margin before the week start so a shift that began late the
   // previous night still counts toward the hours it belongs to.
-  const timeEntries = await getTimeEntries(weekStartMs - 86400000);
+  const timeEntries = await getTimeEntries(weekStartMs - 86400000, 'SS-ISL');
   const entryMins = (e, fromMs) => { const s = Math.max(new Date(e.clockIn).getTime(), fromMs); const en = e.clockOut ? new Date(e.clockOut).getTime() : nowMs; return Math.max(0, (en - s) / 60000); };
   let weekMins = 0, overStudent = 0;
   employees.filter(e => e.active !== false).forEach(emp => {

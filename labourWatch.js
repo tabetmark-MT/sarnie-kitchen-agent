@@ -74,7 +74,7 @@ export async function runClockInLabourPush() {
   const state = await getWatchState('labour_clockin');
   const since = state.lastSeen || new Date(Date.now() - 2 * 60000).toISOString();
   const { data: rows, error } = await supabase.from('time_entries')
-    .select('id,employee_name,clock_in').gt('clock_in', since).order('clock_in', { ascending: true }).limit(20);
+    .select('id,employee_name,clock_in').eq('site', 'SS-ISL').gt('clock_in', since).order('clock_in', { ascending: true }).limit(20);
   if (error) throw new Error(`time_entries read failed: ${error.message}`);
   if (!rows?.length) return { new: 0 };
   state.lastSeen = rows[rows.length - 1].clock_in;
