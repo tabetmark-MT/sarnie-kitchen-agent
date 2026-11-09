@@ -79,7 +79,8 @@ async function todaysHours(today) {
   const sched = await getSetting('schedule').catch(() => null);
   if (!sched || typeof sched !== 'object') return { open: true, openAt: 10 * 60, closeAt: 21 * 60 + 30, known: false };
   const wd = WEEKDAYS[new Date(`${today}T12:00:00Z`).getUTCDay()];
-  const cfg = sched[wd] || {};
+  // schedule.specialHours[date] = one-off hours for that date (festive days).
+  const cfg = sched.specialHours?.[today] ? { ...(sched[wd] || {}), open: true, ...sched.specialHours[today] } : (sched[wd] || {});
   const closed = Array.isArray(sched.closures) && sched.closures.some((x) => (x?.date || x) === today);
   return { open: cfg.open !== false && !closed, openAt: hhmm(cfg.openTime, '10:00'), closeAt: hhmm(cfg.closeTime, '21:30'), known: true };
 }

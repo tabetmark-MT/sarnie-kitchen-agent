@@ -1088,8 +1088,11 @@ ${docs.length ? Object.entries(byCat).map(([cat, titles]) => `  • ${cat} (${ti
   const DAY_KEYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
   const sched = settings.schedule || {};
   const ldnNowD = new Date(new Date().toLocaleString('en-US', { timeZone: LDN }));
-  const todaySched = sched[DAY_KEYS[(ldnNowD.getDay() + 6) % 7]] || {};
   const todayKeyLdn = new Date().toLocaleDateString('en-CA', { timeZone: LDN });
+  // schedule.specialHours[date] = one-off hours for that date (festive days, 9 Nov 2026).
+  const todaySched = sched.specialHours?.[todayKeyLdn]
+    ? { ...(sched[DAY_KEYS[(ldnNowD.getDay() + 6) % 7]] || {}), open: true, ...sched.specialHours[todayKeyLdn] }
+    : (sched[DAY_KEYS[(ldnNowD.getDay() + 6) % 7]] || {});
   const closedToday = todaySched.open === false || (Array.isArray(sched.closures) && sched.closures.includes(todayKeyLdn));
   const toM = (s, fb) => { const [h, m] = String(s || fb).split(':').map(Number); return (h || 0) * 60 + (m || 0); };
   const nowM = ldnNowD.getHours() * 60 + ldnNowD.getMinutes();

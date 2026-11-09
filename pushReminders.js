@@ -48,13 +48,19 @@ export async function runPushReminders({ now = new Date(), dryRun = false } = {}
 
   // What is DUE in the catch-up window.
   const due = [];
+  // One-off hours (schedule.specialHours[date], festive days 9 Nov 2026): the
+  // opening/closing reminders move to that day's open/close, and nothing else
+  // is sent outside those hours.
+  const special = sched?.specialHours?.[today] || null;
   const at = (key, time, meta) => {
     const t = toMin(time);
+    if (special && key !== 'openingClean' && key !== 'closingClean'
+      && (t < toMin(special.openTime) || t > toMin(special.closeTime))) return;
     if (nowMin >= t && nowMin < t + CATCH_UP_MIN) due.push({ key: `${key}@${time}`, base: key, time, ...meta });
   };
   const day = Number(p.day);
-  if (r.openingClean?.enabled) at('openingClean', r.openingClean.time, META.openingClean);
-  if (r.closingClean?.enabled) at('closingClean', r.closingClean.time, META.closingClean);
+  if (r.openingClean?.enabled) at('openingClean', special ? special.openTime : r.openingClean.time, META.openingClean);
+  if (r.closingClean?.enabled) at('closingClean', special ? special.closeTime : r.closingClean.time, META.closingClean);
   if (r.cookChill?.enabled) at('cookChill', r.cookChill.time, META.cookChill);
   if (r.hotHolding?.enabled) (r.hotHolding.times || []).forEach((t) => at('hotHolding', t, META.hotHolding));
   if (r.deliveryLog?.enabled) (r.deliveryLog.times || []).forEach((t) => at('deliveryLog', t, META.deliveryLog));
