@@ -509,7 +509,7 @@ export async function buildKitchenContext() {
     const t = new Date(e.clockIn).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
     return `${nameFor(e.employeeId, e.employeeName)} (since ${t}, ${fmtH(entryMins(e, 0))})`;
   });
-  // A shift auto-closed at the 22:00 cut-off has a PLACEHOLDER finish, not a
+  // A shift auto-closed at the 22:30 cut-off has a PLACEHOLDER finish, not a
   // real one — the person forgot to clock out. Totals that include one are
   // upper bounds, and the model must say so rather than report them as fact.
   const placeholderNote = (list) => {

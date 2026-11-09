@@ -23,7 +23,7 @@ name: Day Watch
 on:
   schedule:
     - cron: '19 10-21 * * *'     # hourly compliance sweep
-    - cron: '43 20,21 * * *'    # 21:45 London in BST and GMT — clock-out nudge
+    - cron: '13 21,22 * * *'    # 22:13 London in BST and GMT — clock-out nudge (cut-off 22:30)
   workflow_dispatch: {}
 
 jobs:

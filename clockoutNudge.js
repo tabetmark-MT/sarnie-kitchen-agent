@@ -1,13 +1,14 @@
 // Watcher 1 — prevention, not correction.
 //
-// auto_close_open_shifts() runs at 22:10 London and pg_cron repeats it at 23:10.
+// auto_close_open_shifts() runs at 22:40 London (agent) and pg_cron repeats it at 22:45.
+// Cut-off moved 22:00 → 22:30 by Mark, 9 Nov 2026.
 // By then the shift is already closed at a PLACEHOLDER time that somebody has to
 // notice and correct before payroll. 14.4% of all shifts on record were closed
 // that way, and those shifts read longer than ones closed properly — so every
 // labour figure in the system, including the rota savings, rests partly on
 // guesses.
 //
-// This fires at 21:45, BEFORE the cut-off, so the person closes their own shift
+// This fires at 22:15, BEFORE the cut-off, so the person closes their own shift
 // at the time they actually left. One message, to the manager, naming who is
 // still open.
 //
@@ -29,15 +30,15 @@ const ldnHourMin = () => {
 };
 
 // The window this is allowed to speak in. Before it, people are legitimately
-// still working; after 22:00 the auto-close has taken over and a nudge is just
+// still working; after 22:30 the auto-close has taken over and a nudge is just
 // noise about something already done.
-const WINDOW_OPEN  = 21 * 60 + 40;   // 21:40
-const WINDOW_CLOSE = 22 * 60;        // 22:00
+const WINDOW_OPEN  = 22 * 60 + 10;   // 22:10
+const WINDOW_CLOSE = 22 * 60 + 30;   // 22:30
 
 export async function runClockoutNudge({ force = false } = {}) {
   const mins = ldnHourMin();
   if (!force && (mins < WINDOW_OPEN || mins >= WINDOW_CLOSE)) {
-    return { skipped: `outside 21:40–22:00 London (now ${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, '0')})` };
+    return { skipped: `outside 22:10–22:30 London (now ${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, '0')})` };
   }
 
   const today = ldnDate();

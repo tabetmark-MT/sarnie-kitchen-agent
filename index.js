@@ -469,7 +469,7 @@ async function runDayWatch() {
     out.labour = { error: e.message };
   }
 
-  // Clock-out nudge — 21:40–22:00 only, gated inside
+  // Clock-out nudge — 22:10–22:30 only, gated inside
   try {
     const n = await runClockoutNudge();
     out.clockoutNudge = n.skipped ? { skipped: n.skipped } : { open: n.open ?? 0 };
@@ -722,11 +722,19 @@ cron.schedule(`${MORNING_MINUTE} ${MORNING_HOUR} * * *`, async () => {
   catch (err) { console.error('[Cron] Morning debrief failed:', err.message); }
 }, { timezone: 'Europe/London' });
 
+// ── Auto clock-out, 22:40 London (cut-off 22:30 since 9 Nov 2026) ───────────
+// Runs before pg_cron's 22:45 repeat, so this path closes the shifts and sends
+// the Telegram naming who forgot.
+cron.schedule('40 22 * * *', async () => {
+  try { await runAutoClockOutAndNotify(); }
+  catch (err) { console.error('[Cron] Auto clock-out failed:', err.message); }
+}, { timezone: 'Europe/London' });
+
 // ── Nightly off-site backup cron (Europe/London) ────────────────────────────
 cron.schedule(`${BACKUP_MINUTE} ${BACKUP_HOUR} * * *`, async () => {
   console.log('[Cron] Running nightly auto clock-out + Dropbox backup...');
   try {
-    await runAutoClockOutAndNotify(); // close anyone who forgot to clock out at 22:00
+    await runAutoClockOutAndNotify(); // no-op before the 22:30 cut-off; the 22:40 run below does it
     await runSnapshotAndNotify();     // in-app restore point, before the off-site copy
     await runStorageBackupAndNotify();// certificate + RTW files, which tables don't carry
     const result = await runNightlyBackup();
