@@ -18,6 +18,7 @@ import { runComplianceWatch, formatComplianceWatch, markComplianceAlerted, compl
 import { runAutoClockOut, formatAutoClockOut } from './autoClockout.js';
 import { supabase, getSetting, upsertSetting, getComplianceSnapshot, markRun, getWatchState, setWatchState } from './supabase.js';
 import { authorisedIntel, buildComplianceSnapshot } from './intel.js';
+import { siteGate } from './siteGate.js';
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -565,10 +566,13 @@ const intelCors = (res) => {
 app.options('/api/intel/snapshot', (req, res) => { intelCors(res); res.sendStatus(204); });
 app.get('/api/intel/snapshot', async (req, res) => {
   intelCors(res);
-  if (!(await authorisedIntel(req))) return res.status(401).json({ error: 'Unauthorized — pass a valid token (Bearer header or ?token=)' });
+  if (!(await authorisedIntel(req))) return res.status(401).json({ error: 'Unauthorized — pass a valid token (Bearer header)' });
+  // Same per-kitchen contract as the kitchen app's snapshot (feed 'intel').
+  const gate = await siteGate(req, res, { feed: 'intel', empty: { cleaningByDay: [], fridges: [], flags: [] } });
+  if (!gate) return;
   try {
     const snapshot = await buildComplianceSnapshot({ from: req.query.from, to: req.query.to });
-    res.json(snapshot);
+    res.json({ ...gate.echo, ...snapshot });
   } catch (err) {
     console.error('[Intel] snapshot error:', err.message);
     res.status(500).json({ error: 'Failed to build snapshot' });

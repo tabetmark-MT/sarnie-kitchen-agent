@@ -5,6 +5,7 @@
 // probe calibration, allergen review status, deliveries, supplier certs and
 // staff hours — all Europe/London aware.
 import { supabase, getSettings, getTimeEntries } from './supabase.js';
+import { urlTokenAllowed } from './siteGate.js';
 
 const r1 = (n) => Math.round(n * 10) / 10;
 const londonKey = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Europe/London' }); // YYYY-MM-DD
@@ -46,7 +47,8 @@ export async function authorisedIntel(req) {
   const header = req.headers?.authorization;
   const bearer = header && header.startsWith('Bearer ') ? header.slice(7) : null;
   const qp = req.query?.token;
-  return bearer === token || qp === token;
+  // ?token= refused from the 1 Dec 2026 cut-over, same as the kitchen app.
+  return bearer === token || (urlTokenAllowed() && qp === token);
 }
 
 // Build the compliance snapshot for a London day-key range [from, to] inclusive.
