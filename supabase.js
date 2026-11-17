@@ -451,13 +451,13 @@ export async function addAppUser({ name, role, kitchen }) {
 // ── Live supplier/item catalogue from SARNIE OS (source of truth) ──────────
 // The delivery screens read this feed live; the agent must see the same thing,
 // not the stale local seed. Fail-soft: returns null if unreachable.
-async function getLiveCatalog() {
+async function getLiveCatalog(site = HOME_SITE) {
   try {
     const url = process.env.SUPPLIER_FEED_URL || (await getSetting('sarnie_suppliers_url')) || 'https://sarnie-inventory-app.vercel.app/api/suppliers';
     const token = process.env.SUPPLIER_FEED_TOKEN || (await getSetting('sarnie_supplier_feed_token'));
     if (!token) return null;
     // Feed contract (2 Nov 2026): every feed call names the kitchen.
-    const res = await fetch(`${url}${url.includes('?') ? '&' : '?'}site=SS-ISL`, {
+    const res = await fetch(`${url}${url.includes('?') ? '&' : '?'}site=${encodeURIComponent(site)}`, {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       signal: AbortSignal.timeout(8000),
     });
@@ -465,6 +465,15 @@ async function getLiveCatalog() {
     const data = await res.json();
     return Array.isArray(data?.suppliers) ? data.suppliers : null;
   } catch { return null; }
+}
+
+// Supplier feed per kitchen (contract agreed 17 Nov 2026): one read per trading
+// kitchen. Islington first; while it is the only trading kitchen the context
+// below is exactly what it was. A kitchen whose read fails says so on its own.
+async function getLiveCatalogs() {
+  const sites = await getTradingSites().catch(() => [HOME_SITE]);
+  const lists = await Promise.all(sites.map((site) => getLiveCatalog(site)));
+  return sites.map((site, k) => ({ site, suppliers: lists[k] }));
 }
 
 // ── Live EHO / compliance snapshot — the SAME /api/compliance feed the app
@@ -488,14 +497,14 @@ export async function getComplianceSnapshot() {
 
 // ── Build a rich context summary for Claude ───────────────────────────────
 export async function buildKitchenContext() {
-  const [todayC, yesterdayC, recentC, users, audit, settings, liveCatalog, compliance] = await Promise.all([
+  const [todayC, yesterdayC, recentC, users, audit, settings, liveCatalogs, compliance] = await Promise.all([
     getTodayCompletions(),
     getYesterdayCompletions(),
     getCompletionsRange(35),
     getUsers(),
     getRecentAudit(30),
     getSettings(),
-    getLiveCatalog(),
+    getLiveCatalogs(),
     getComplianceSnapshot(),
   ]);
 
@@ -883,13 +892,17 @@ ${activeEmps.length ? activeEmps.map(profileLine).join('\n') : '  • No active 
   const expiredCerts = suppliers.reduce((n, s) => n + ((s.certificates || []).filter(c => c.expiryDate && new Date(c.expiryDate) < new Date()).length), 0);
 
   // ── Suppliers & items (live from SARNIE OS) + kitchen-held certificates ──
-  const catalogLines = liveCatalog
+  const catalogFor = (liveCatalog) => liveCatalog
     ? liveCatalog.map(s => {
         const items = s.items || [];
         const cats = [...new Set(items.map(i => i.category).filter(Boolean))].slice(0, 4).join(', ');
         return `  • ${s.name} — ${items.length} item${items.length !== 1 ? 's' : ''}${cats ? ` (${cats})` : ''}${s.leadTimeDays != null ? `, lead time ${s.leadTimeDays}d` : ''}${s.deliveryDays?.length ? `, delivers ${[].concat(s.deliveryDays).join('/')}` : ''}`;
       }).join('\n')
     : '  • Live item feed unreachable right now — say so if asked for item-level detail rather than guessing.';
+  const homeCatalog = liveCatalogs.find(c => c.site === HOME_SITE)?.suppliers ?? null;
+  const catalogLines = catalogFor(homeCatalog) + liveCatalogs
+    .filter(c => c.site !== HOME_SITE)
+    .map(c => `\n  ${c.site} (its own suppliers, terms and items):\n${catalogFor(c.suppliers)}`).join('');
   const certLines = suppliers.flatMap(s => (s.certificates || []).map(c => {
     if (!c.expiryDate) return `  • ${s.name} — ${c.name || 'certificate'}: no expiry set`;
     const days = Math.floor((new Date(c.expiryDate) - Date.now()) / 86400000);
