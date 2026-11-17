@@ -152,7 +152,13 @@ export async function runComplianceWatch({ force = false, site = HOME_SITE } = {
       const heldMin = Math.round((endMs - startMs) / 60000);
       let gap = 0;
       const pts = [...rs.map((r) => new Date(r.time).getTime()), endMs];
-      for (let i = 1; i < pts.length; i++) gap = Math.max(gap, (pts[i] - pts[i - 1]) / 60000);
+      // Discard closes the batch (Mark, 17 Nov 2026): for a DISCARDED batch the
+      // stretch from the last probe to the discard is not counted, as long as
+      // the discard is within the 4h limit + the same 10-min grace. Discarded
+      // later than that, the stretch counts as before. Served = unchanged.
+      const discardExcused = it.outcome === 'discarded' && heldMin <= 240 + PROBE_GRACE_MIN;
+      const lastI = discardExcused ? pts.length - 1 : pts.length;
+      for (let i = 1; i < lastI; i++) gap = Math.max(gap, (pts[i] - pts[i - 1]) / 60000);
       const why = [];
       if (it.outcome === 'served' && heldMin > 240) why.push(`served after ${Math.floor(heldMin / 60)}h${String(heldMin % 60).padStart(2, '0')}m (limit 4h)`);
       // 10-minute grace on the 2-hour probe (Mark, 9 Oct 2026): staff still get
