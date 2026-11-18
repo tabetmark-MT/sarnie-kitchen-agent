@@ -204,6 +204,7 @@ export async function getAllData() {
     sites: 'code',
     site_settings: 'site',
     user_sites: 'user_id',
+    employee_sites: 'employee_id',
   };
   const PAGE = 1000;
   const tables = [
@@ -228,6 +229,11 @@ export async function getAllData() {
     'sites', 'site_settings',
     // K2 (2 Nov 2026): which kitchens each login may use.
     'user_sites',
+    // K3 (9 Nov 2026), added to the backup 18 Nov (Mark): staff per person,
+    // which kitchen(s) each person works at, and login profiles per login.
+    // employee_rows / team_rows are mirrored into app_settings, but
+    // employee_sites is not, so it was the one K3 table a restore would lose.
+    'employee_rows', 'employee_sites', 'team_rows',
   ];
   const out = {};
   const short = [];
