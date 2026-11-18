@@ -1,4 +1,4 @@
-import { getAllData, getSetting, upsertSetting, markRun } from './supabase.js';
+import { getAllData, getSetting, upsertSetting, markRun, checkBackupCoverage } from './supabase.js';
 import { uploadToDropbox, dropboxConfigured } from './dropbox.js';
 
 const londonDate = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }); // YYYY-MM-DD
@@ -53,7 +53,8 @@ export async function runNightlyBackup({ force = false } = {}) {
   // worst possible silent failure, and the guard is worth more here than on
   // any of the others.
   const count = (t) => (Array.isArray(data?.[t]) ? data[t].length : 0);
-  const CORE = ['app_users', 'app_settings', 'checklists', 'time_entries'];
+  // employee_rows joined 18 Nov 2026: the staff list is never legitimately empty.
+  const CORE = ['app_users', 'app_settings', 'checklists', 'time_entries', 'employee_rows'];
   const emptyCore = CORE.filter((t) => count(t) === 0);
   if (emptyCore.length) {
     return {
@@ -88,7 +89,10 @@ export async function runNightlyBackup({ force = false } = {}) {
     Object.entries(data).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0])
   );
   await markRun('backup');
-  return { ok: true, path, sizeKB: Math.round(json.length / 1024), counts };
+  // Coverage: a table in the schema that the backup didn't take. The backup is
+  // still good for everything it did take, so it's written, but Mark is told.
+  const coverage = await checkBackupCoverage(data);
+  return { ok: true, path, sizeKB: Math.round(json.length / 1024), counts, coverage };
 }
 
 // Human-readable summary for Telegram
@@ -102,5 +106,8 @@ export function formatBackupResult(r) {
     `• ${c.app_users ?? 0} users\n` +
     `• ${c.checklists ?? 0} checklists\n` +
     `• ${c.audit_log ?? 0} audit entries\n` +
-    `• ${c.app_settings ?? 0} settings (incl. documents & team)`;
+    `• ${c.app_settings ?? 0} settings (incl. documents & team)\n` +
+    `• ${c.employee_rows ?? 0} staff · ${c.time_entries ?? 0} shifts` +
+    (r.coverage?.missing?.length ? `\n\n⚠️ NOT backed up (new tables): ${r.coverage.missing.join(', ')}` : '') +
+    (r.coverage?.error ? `\n\n⚠️ Backup coverage check failed: ${r.coverage.error}` : '');
 }

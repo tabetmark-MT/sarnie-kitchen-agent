@@ -202,9 +202,11 @@ export async function getAllData() {
     employee_pay: 'employee_id',
     popup_compliance: 'event_id',
     sites: 'code',
-    site_settings: 'site',
-    user_sites: 'user_id',
-    employee_sites: 'employee_id',
+    // Composite keys are ordered on EVERY key column (18 Nov 2026): ordering on
+    // the first column only can repeat/skip rows across 1000-row pages.
+    site_settings: ['site', 'key'],
+    user_sites: ['user_id', 'site'],
+    employee_sites: ['employee_id', 'site'],
   };
   const PAGE = 1000;
   const tables = [
@@ -238,12 +240,13 @@ export async function getAllData() {
   const out = {};
   const short = [];
   for (const t of tables) {
-    const orderBy = PK[t] || 'id';
+    const orderCols = [].concat(PK[t] || 'id');
     const rows = [];
     let failed = false;
     for (let from = 0; ; from += PAGE) {
-      const { data, error } = await supabase
-        .from(t).select('*').order(orderBy, { ascending: true }).range(from, from + PAGE - 1);
+      let q = supabase.from(t).select('*');
+      for (const c of orderCols) q = q.order(c, { ascending: true });
+      const { data, error } = await q.range(from, from + PAGE - 1);
       if (error) { console.warn(`[Backup] could not read ${t}:`, error.message); failed = true; break; }
       rows.push(...(data || []));
       if (!data || data.length < PAGE) break;
@@ -262,6 +265,28 @@ export async function getAllData() {
     throw e;
   }
   return redactSecrets(out);
+}
+
+// Tables the nightly backup deliberately leaves out (each a decision, not an
+// accident). Anything else in public that isn't backed up is a GAP.
+export const BACKUP_EXCLUDED = {
+  employee_pins: 'credentials; an admin resets a PIN in seconds',
+  auth_throttle: 'transient rate-limit state',
+  backups: 'the backup log itself',
+  push_subscriptions: 'phone notification registrations; each device re-registers',
+  agent_task_calls: 'scheduler call log (transient diagnostics)',
+};
+
+// Coverage guard (Mark, 18 Nov 2026): compares the live public schema with
+// what getAllData() read. Returns { missing: [...] } or { error } — never
+// throws, so a failed check can't stop the backup itself.
+export async function checkBackupCoverage(backedUp) {
+  const { data, error } = await supabase.rpc('backup_list_public_tables');
+  if (error) return { error: error.message };
+  const have = new Set(Object.keys(backedUp || {}));
+  const missing = (data || []).map((r) => (typeof r === 'string' ? r : Object.values(r)[0]))
+    .filter((t) => !have.has(t) && !(t in BACKUP_EXCLUDED));
+  return { missing };
 }
 
 // The backup is a 1.8 MB JSON file sitting in Dropbox. Until 17 Aug 2026 it

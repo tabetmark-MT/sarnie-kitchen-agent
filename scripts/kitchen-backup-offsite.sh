@@ -25,9 +25,11 @@ SRC="$HOME/Library/CloudStorage/Dropbox/Apps/Sarnie Social Backups"
 DST="$HOME/Library/CloudStorage/OneDrive-Personal/4. Sarnie Social/SARNIE OS Backups/Kitchen app"
 CIPHER=(-aes-256-cbc -pbkdf2 -iter 200000 -md sha256)
 stamp() { date '+%Y-%m-%d %H:%M'; }
+# A failure must not sit silently in a log (18 Nov 2026): Mac notification too.
+alert() { echo "$(stamp) · kitchen offsite: $1"; /usr/bin/osascript -e "display notification \"$1\" with title \"Sarnie kitchen backup\" sound name \"Basso\"" >/dev/null 2>&1 || true; }
 
 PASS=$(security find-generic-password -s sarnie-kitchen-backup -a encryption -w 2>/dev/null) || {
-  echo "$(stamp) · kitchen offsite: no encryption key in the Keychain (sarnie-kitchen-backup / encryption)"; exit 4; }
+  alert "no encryption key in the Keychain (sarnie-kitchen-backup / encryption)"; exit 4; }
 
 dec() { openssl enc -d "${CIPHER[@]}" -pass fd:3 -in "$1" 3<<<"$PASS"; }
 
@@ -82,5 +84,10 @@ fi
 
 count=$(ls -1 "$DST" | grep -cE '\.enc$'); size=$(du -sh "$DST" | cut -f1)
 echo "$(stamp) · kitchen offsite: $copied new copied, encrypted and verified · $count copies held ($size)"
-[ "$failed" -eq 0 ] || { echo "$(stamp) · kitchen offsite: $failed FAILED/skipped"; exit 5; }
+# Is the 22:00 Render backup still arriving? Newest file older than 36 h = it stopped.
+newest=$(ls -1 "$SRC" | grep -E '^sarnie-backup-[0-9]{4}-[0-9]{2}-[0-9]{2}\.json$' | sort | tail -1)
+nd=${newest#sarnie-backup-}; nd=${nd%.json}
+age_h=$(( ( $(date +%s) - $(date -j -f '%Y-%m-%d %H:%M' "$nd 22:00" +%s 2>/dev/null || echo 0) ) / 3600 ))
+[ "$age_h" -le 36 ] || alert "newest Dropbox backup is ${nd:-none} (${age_h}h old) — the 22:00 nightly backup has stopped"
+[ "$failed" -eq 0 ] || { alert "$failed backup copy/copies FAILED or skipped — see kitchen-backup-offsite.log"; exit 5; }
 exit 0
