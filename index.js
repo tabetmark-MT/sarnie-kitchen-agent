@@ -465,7 +465,13 @@ async function runDayWatch() {
 
   // Labour band — hourly; Telegram only when the projection leaves or
   // re-enters 18–25% (Mark, 2 Nov 2026).
-  try {
+  // Quiet hours (Mark, 19 Nov 2026): labour messages only 10:00–22:30 London.
+  // Outside that the check doesn't run at all, so its state isn't advanced and
+  // a change overnight is reported at the first run after 10:00.
+  const ldnMin = (() => { const [h, m] = new Date().toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false }).split(':').map(Number); return h * 60 + m; })();
+  if (ldnMin < 10 * 60 || ldnMin > 22 * 60 + 30) {
+    out.labour = { skipped: 'quiet hours (10:00–22:30 only)' };
+  } else try {
     const l = await runLabourWatch();
     out.labour = { alerted: !!l.msg };
     if (l.msg) await sendAlert(l.msg + src('SARNIE OS labour plan'));
