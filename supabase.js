@@ -652,7 +652,7 @@ export async function buildKitchenContext() {
   const unratedNames = payEmps.filter(e => empRate(e) === 0 && worked(e) && !(e.unpaid || e.empType === 'intern')).map(e => e.name);
   const unpaidNames  = payEmps.filter(e => empRate(e) === 0 && worked(e) &&  (e.unpaid || e.empType === 'intern')).map(e => e.name);
   const labourBlock = anyRates
-    ? `\nEMPLOYEE LABOUR COST = PAYROLL (pay rate × ALL clocked hours, wages only — admin data). Use it for "what are we paying / wages" questions. It INCLUDES hours worked for pop-ups and catering orders, which SARNIE OS books to the event and removes from Deliveroo labour (Core, 20 + 24 Nov 2026) — so for Deliveroo labour £ or % quote the LABOUR PLAN block, never this one:\n  This week so far: £${Math.round(weekCost)} · Month to date: £${Math.round(monthCost)} · Projected month: £${projMonthCost}\n${labourLines.join('\n')}${
+    ? `\nEMPLOYEE LABOUR COST = WAGES, EVERYTHING CLOCKED (pay rate × ALL clocked hours, wages only — admin data). Use it for "what are we paying / wages" questions. It INCLUDES hours worked for pop-ups and catering orders, which SARNIE OS books to the event and removes from Deliveroo labour (Core, 20 + 24 Nov 2026) — so for Deliveroo labour £ or % quote the LABOUR PLAN block, never this one:\n  This week so far: £${Math.round(weekCost)} · Month to date: £${Math.round(monthCost)} · Projected month: £${projMonthCost}\n${labourLines.join('\n')}${
         unratedNames.length ? `\n  ⚠️ Worked this week but has NO pay rate set: ${unratedNames.join(', ')} — the totals above are UNDERSTATED by their hours. Say so if you quote a labour cost, and suggest adding their rate.` : ''}${
         unpaidNames.length ? `\n  ℹ️ Unpaid intern(s) this week: ${unpaidNames.join(', ')}. Their hours are real but cost £0 by design, so these totals are CORRECT — never describe them as understated, and never suggest putting a rate on an intern.` : ''}`
     : `\nEMPLOYEE LABOUR COST: no pay rates set yet — if Mark asks, tell him to add £/hr on each Employee Profile (Employee Management → Employee Profile, management only) to unlock labour costing.`;
@@ -1250,7 +1250,7 @@ async function labourPlanBlock() {
   Target band: ${t.minPct}–${t.maxPct}% of ${d.definition || d.basis || 'sales before commission, ex-VAT'}.
   Sales: ${g(sl.actualToDate)} to date + ${g(sl.forecastRemaining)} forecast = ${g(sl.projected)} projected.
   Actual so far (DELIVEROO labour: wages + employer costs, finished days, event work removed): ${g(a.cost)}, ${a.hours}h, ${a.pct}%.
-  This is the figure to quote for "labour" / "labour cost" against Deliveroo. The EMPLOYEE LABOUR COST block is PAYROLL (everything clocked, including work booked to events) — different on event days by design.
+  This is the figure to quote for "labour" / "labour cost" against Deliveroo. The EMPLOYEE LABOUR COST block is WAGES (everything clocked, including work booked to events; off-site event hours worked after clocking out are not in it — they sit only on the event) — different on event days by design.
   ${pr('On pace', d.projected?.onPace)}
   ${pr(d.planBasis === 'rota' ? "If everyone works this week's rota" : 'If everyone works their contract max (no rota imported)', d.projected?.ifPlanned)}
   Budget to stay in band: ${g(b.atMin)}–${g(b.atMax)} (${b.hoursAtMin}–${b.hoursAtMax}h).
