@@ -652,7 +652,7 @@ export async function buildKitchenContext() {
   const unratedNames = payEmps.filter(e => empRate(e) === 0 && worked(e) && !(e.unpaid || e.empType === 'intern')).map(e => e.name);
   const unpaidNames  = payEmps.filter(e => empRate(e) === 0 && worked(e) &&  (e.unpaid || e.empType === 'intern')).map(e => e.name);
   const labourBlock = anyRates
-    ? `\nEMPLOYEE LABOUR COST (pay rate × clocked hours — admin data; answer Mark's cost questions from here):\n  This week so far: £${Math.round(weekCost)} · Month to date: £${Math.round(monthCost)} · Projected month: £${projMonthCost}\n${labourLines.join('\n')}${
+    ? `\nEMPLOYEE LABOUR COST = PAYROLL (pay rate × ALL clocked hours, wages only — admin data). Use it for "what are we paying / wages" questions. It INCLUDES hours worked for pop-ups and catering orders, which SARNIE OS books to the event and removes from Deliveroo labour (Core, 20 + 24 Nov 2026) — so for Deliveroo labour £ or % quote the LABOUR PLAN block, never this one:\n  This week so far: £${Math.round(weekCost)} · Month to date: £${Math.round(monthCost)} · Projected month: £${projMonthCost}\n${labourLines.join('\n')}${
         unratedNames.length ? `\n  ⚠️ Worked this week but has NO pay rate set: ${unratedNames.join(', ')} — the totals above are UNDERSTATED by their hours. Say so if you quote a labour cost, and suggest adding their rate.` : ''}${
         unpaidNames.length ? `\n  ℹ️ Unpaid intern(s) this week: ${unpaidNames.join(', ')}. Their hours are real but cost £0 by design, so these totals are CORRECT — never describe them as understated, and never suggest putting a rate on an intern.` : ''}`
     : `\nEMPLOYEE LABOUR COST: no pay rates set yet — if Mark asks, tell him to add £/hr on each Employee Profile (Employee Management → Employee Profile, management only) to unlock labour costing.`;
@@ -708,7 +708,7 @@ export async function buildKitchenContext() {
       const alignedWeek  = salesEndMs > weekStart.getTime()  ? costOnCoveredDays(weekStart.getTime())  : null;
       const alignedMonth = salesEndMs > monthStart.getTime() ? costOnCoveredDays(monthStart.getTime()) : null;
 
-      // Labour is measured against NET (after Deliveroo's ~27% commission) —
+      // Labour is measured against NET (after Deliveroo's commission, 25% since 26 Oct 2026) —
       // gross would flatter every ratio by roughly a third.
       // Labour % is measured against TURNOVER EX-VAT — standard restaurant
       // practice, and what the 25-35% benchmark actually refers to. Deliveroo's
@@ -750,13 +750,13 @@ export async function buildKitchenContext() {
   This week: turnover ex-VAT ${fmtGBP(exW)} (matches Deliveroo Hub NET SALES) over ${w.tradingDays} trading day(s)${gaps(w)}
   Month to date: turnover ex-VAT ${fmtGBP(exM)} (matches Deliveroo Hub NET SALES) over ${m.tradingDays} trading day(s)${gaps(m)}
   Most recent trading day on file: ${latest ? `${latest.date} — turnover ex-VAT ${fmtGBP(Number(latest.gross) || 0)} (this is the figure Deliveroo Hub shows as NET SALES)` : 'none'}
-  ${m.estimated ? 'Note: at least one day had no commission figure, so 27% was assumed — treat as slightly approximate.\n  ' : ''}RULES YOU MUST FOLLOW:
+  ${m.estimated ? 'Note: at least one day had no commission figure, so the standard commission rate was assumed — treat as slightly approximate.\n  ' : ''}RULES YOU MUST FOLLOW:
   • Sundays are scheduled-closed — labour ÷ sales is undefined, not zero. Never average them in. If one ever DOES take money it still counts as revenue.
   • A trading day with no data is a GAP in the OS history, not a zero-sales day. Never describe one as "no sales".
   • Sales are ALWAYS one day behind (Deliveroo T+1). There is no same-day figure and there never will be on this feed. If Mark asks how today is going, say the figure arrives tomorrow morning — do not report today as £0, and do not treat the lag as a broken feed.
   • Say "ex-VAT turnover" when you quote the denominator, so Mark knows which figure it is. Deliveroo's commission is a COST OF SALE and does NOT reduce turnover — never subtract it before working out labour %.
   • Do NOT quote a "net sales" or payout figure from this feed. Its net field omits VAT on commission and per-statement fees, so it overstates the money actually banked by roughly 18%. Order value and ex-VAT turnover are reconciled and safe; payout is not.
-  • Deliveroo's real take is about 38% of order value (27% commission + 20% VAT on that + advertising/refund fees). If Mark asks what Deliveroo costs him, use ~38%, not 27%.
+  • Deliveroo commission is 25% of the inc-VAT order value since Mon 26 Oct 2026 (27% before); Deliveroo adds 20% VAT on the commission (reclaimable). The all-in channel cost (commission, its VAT, fees, offers we fund) varies week to week and is measured from the statements in SARNIE OS — if Mark asks what Deliveroo costs him, say that and quote 25% commission; do not give a fixed all-in %.
   • Labour % is NOT in this block. Quote labour % ONLY from the LABOUR PLAN block below (SARNIE OS's projection, the same figure both apps show).
   • The labour figures inside each % have ALREADY been trimmed to the days sales cover, so the percentages are like-for-like. The standalone labour £ totals in the EMPLOYEE LABOUR COST block run to today and are therefore LARGER — never divide those by these sales figures yourself.`;
     }
@@ -1249,9 +1249,10 @@ async function labourPlanBlock() {
     return `\nLABOUR PLAN (live from SARNIE OS, week ${d.week?.id || '?'} — the ONLY source for labour %; quote these numbers, never recompute):
   Target band: ${t.minPct}–${t.maxPct}% of ${d.definition || d.basis || 'sales before commission, ex-VAT'}.
   Sales: ${g(sl.actualToDate)} to date + ${g(sl.forecastRemaining)} forecast = ${g(sl.projected)} projected.
-  Actual so far: ${g(a.cost)}, ${a.hours}h, ${a.pct}%.
+  Actual so far (DELIVEROO labour: wages + employer costs, finished days, event work removed): ${g(a.cost)}, ${a.hours}h, ${a.pct}%.
+  This is the figure to quote for "labour" / "labour cost" against Deliveroo. The EMPLOYEE LABOUR COST block is PAYROLL (everything clocked, including work booked to events) — different on event days by design.
   ${pr('On pace', d.projected?.onPace)}
-  ${pr('If everyone works their plan (students at term cap, contract at max)', d.projected?.ifPlanned)}
+  ${pr(d.planBasis === 'rota' ? "If everyone works this week's rota" : 'If everyone works their contract max (no rota imported)', d.projected?.ifPlanned)}
   Budget to stay in band: ${g(b.atMin)}–${g(b.atMax)} (${b.hoursAtMin}–${b.hoursAtMax}h).
   ${Array.isArray(d.assumptions) && d.assumptions.length ? `Assumptions: ${d.assumptions.join(' | ')}` : ''}`;
   } catch (e) {
